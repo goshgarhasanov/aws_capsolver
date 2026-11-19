@@ -214,3 +214,190 @@ def test_goku_only_params_still_fetch_page(fake_session, monkeypatch):
                                aws_context="C2"),
         solvermod.SolverSettings(verify_token=False))
     assert out.token == "TOK"
+
+
+# --- challenge / captcha edge cases ------------------------------------------------------
+import time  # noqa: E402
+
+from aws_capsolver.waf.parse import extract_waf_params  # noqa: E402
+
+
+def test_challenge_accepts_numeric_string_difficulty(fake_session):
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", lambda kw: (200, {
+        "challenge": {"input": "i"}, "challenge_type": HASH_A9F, "difficulty": "1"}))
+    fake_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (200, {"token": "T"}))
+    assert solve_challenge(fake_session, TOKEN_BASE, "d") == "T"
+
+
+@pytest.mark.parametrize("inputs", [
+    {"challenge": {"input": "i"}, "challenge_type": 5, "difficulty": 1},
+    {"challenge": {"input": "i"}, "challenge_type": HASH_A9F, "difficulty": True},
+    {"challenge": "i", "challenge_type": HASH_A9F, "difficulty": 1},
+    {"challenge": {"input": ""}, "challenge_type": HASH_A9F, "difficulty": 1},
+])
+def test_challenge_rejects_malformed_inputs(fake_session, inputs):
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", lambda kw: (200, inputs))
+    with pytest.raises(SolverError) as err:
+        solve_challenge(fake_session, TOKEN_BASE, "d")
+    assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+
+
+def test_challenge_all_candidates_rejected(fake_session):
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", _inputs(HASH_A9F))
+    fake_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (400, {}))
+    fake_session.add("POST", f"{TOKEN_BASE}/verify", lambda kw: (400, {}))
+    with pytest.raises(SolverError) as err:
+        solve_challenge(fake_session, TOKEN_BASE, "d", sleep=lambda s: None, processes=1)
+    assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+    assert len([c for c in fake_session.calls if c[1].endswith("/inputs")]) == 3
+
+
+def test_challenge_non_string_token(fake_session):
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", _inputs(HASH_A9F))
+    fake_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (200, {"token": 123}))
+    with pytest.raises(SolverError):
+        solve_challenge(fake_session, TOKEN_BASE, "d")
+
+
+def test_challenge_deadline(fake_session):
+    with pytest.raises(SolverError) as err:
+        solve_challenge(fake_session, TOKEN_BASE, "d", deadline=time.monotonic() - 1)
+    assert err.value.code == "ERROR_TASK_TIMEOUT"
+    assert fake_session.calls == []
+
+
+def test_grid_tile_count():
+    assert cap.grid_tile_count({"problem_type": "gridcaptcha-5-0.1-0"}) == 5
+    assert cap.grid_tile_count({"problem_type": "gridcaptcha-x"}) is None
+    assert cap.grid_tile_count({"problem_type": "toycarcity-1"}) is None
+    assert cap.grid_tile_count({}) is None
+
+
+def _ctx():
+    return cap.CaptchaContext(CAPTCHA_BASE, TOKEN_BASE, "d", None)
+
+
+def test_bad_base64_grid_image_falls_to_audio(fake_session, fake_vision):
+    bad = grid_problem()
+    bad["assets"]["images"] = json.dumps(["%%%not-base64%%%"] * 9)
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, bad))
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx())
+    assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+    assert [c[2]["params"]["kind"] for c in fake_session.calls] == ["visual", "audio"]
+    assert fake_vision == []  # never reached the model
+
+
+@pytest.mark.parametrize("problem", [
+    {"problem_type": "gridcaptcha-5", "state": "s", "assets": "not-a-dict"},
+    {"problem_type": "toycarcity-1", "state": "s", "assets": {"image": 5}},
+    {"problem_type": "noisyneighbour-1", "state": "s", "assets": {"audio": ["x"]}},
+    {"problem_type": "brandnew-1", "state": "s", "assets": {}},
+])
+def test_malformed_problems_are_unsolvable(problem):
+    with pytest.raises(SolverError) as err:
+        cap.solve_problem(problem)
+    assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+
+
+def test_vision_errors_become_unsolvable(monkeypatch):
+    from aws_capsolver.vision.errors import InvalidInput
+
+    def raise_invalid(images, target, count=None):
+        raise InvalidInput("9 tiles expected")
+
+    monkeypatch.setattr(vision_bridge, "classify_grid", raise_invalid)
+    with pytest.raises(SolverError) as err:
+        cap.solve_problem(grid_problem())
+    assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+    monkeypatch.setattr(vision_bridge, "classify_grid", lambda i, t, count=None: ["a"])
+    with pytest.raises(SolverError):
+        cap.solve_problem(grid_problem())
+    monkeypatch.setattr(vision_bridge, "classify_grid", lambda i, t, count=None: [])
+    with pytest.raises(SolverError):
+        cap.solve_problem(grid_problem())
+
+
+def test_captcha_success_without_voucher_or_problem(fake_session, fake_vision):
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    fake_session.add("POST", f"{CAPTCHA_BASE}/verify",
+                     lambda kw: (200, {"success": True, "problem": "garbage",
+                                       "captcha_voucher": 17}))
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx(), kinds=("visual",))
+    assert "no voucher and no next problem" in err.value.description
+
+
+def test_captcha_non_string_region_is_ignored(fake_session, fake_vision):
+    problem = grid_problem()
+    problem["region"] = {"bad": 1}
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, problem))
+    fake_session.add("POST", f"{CAPTCHA_BASE}/verify",
+                     lambda kw: (200, {"success": True, "captcha_voucher": "V"}))
+    result = cap.solve_captcha(fake_session, _ctx(), redeem=False)
+    assert result.voucher == "V" and result.token is None
+    assert [c[1] for c in fake_session.calls][-1] == f"{CAPTCHA_BASE}/verify"
+
+
+def test_captcha_more_problems_than_rounds(fake_session, fake_vision):
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    fake_session.add("POST", f"{CAPTCHA_BASE}/verify",
+                     lambda kw: (200, {"success": True, "problem": grid_problem()}))
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx(), max_rounds=2)
+    assert "more problems required" in err.value.description
+    assert len([c for c in fake_session.calls if "/verify" in c[1]]) == 2
+    assert len([c for c in fake_session.calls if "/problem" in c[1]]) == 1  # no audio retry
+
+
+def test_captcha_deadline_and_cancel(fake_session, fake_vision):
+    import threading
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx(), deadline=time.monotonic() - 1)
+    assert err.value.code == "ERROR_TASK_TIMEOUT"
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx(), cancel=cancel)
+    assert err.value.code == "ERROR_SERVICE_UNAVAILABLE"
+    assert fake_session.calls == []
+
+
+def test_voucher_network_failure_is_reported(fake_session, fake_vision):
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    fake_session.add("POST", f"{CAPTCHA_BASE}/verify",
+                     lambda kw: (200, {"success": True, "captcha_voucher": "V"}))
+    fake_session.add("POST", f"{TOKEN_BASE}/voucher",
+                     lambda kw: requests.exceptions.ConnectionError("down"))
+    with pytest.raises(SolverError) as err:
+        cap.solve_captcha(fake_session, _ctx())
+    assert err.value.code == "ERROR_SITE_UNREACHABLE"
+
+
+def test_extract_escaped_script_urls_and_odd_goku():
+    escaped = TOKEN_BASE.replace("/", "\\/")
+    html = ('<script>var cfg = {"src": "' + escaped + '\\/challenge.js"};'
+            'window.gokuProps = {"key": "K", "iv": 5, "context": null};</script>')
+    params = extract_waf_params(html)
+    assert params.challenge_js == f"{TOKEN_BASE}/challenge.js"
+    assert params.key == "K" and params.iv is None and params.goku_props is None
+
+
+def test_solve_website_captcha_endpoint_from_refreshed_page(fake_session, monkeypatch,
+                                                           fake_vision):
+    """PoW token rejected by the page -> captcha via the endpoint named on that page."""
+    _patch_session(monkeypatch, fake_session)
+    fake_session.add("GET", "https://shop.example/", lambda kw: (200, CHALLENGE_ONLY_PAGE),
+                     times=1)
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", _inputs(HASH_A9F))
+    fake_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (200, {"token": "POW"}))
+    fake_session.add("GET", "https://shop.example/", lambda kw: (405, CAPTCHA_PAGE))
+    fake_session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    fake_session.add("POST", f"{CAPTCHA_BASE}/verify",
+                     lambda kw: (200, {"success": True, "captcha_voucher": "V"}))
+    fake_session.add("POST", f"{TOKEN_BASE}/voucher", lambda kw: (200, {"token": "CAPTOK"}))
+    out = solvermod.solve_website(solvermod.SolveRequest("https://shop.example/"),
+                                  solvermod.SolverSettings())
+    assert out.token == "CAPTOK" and out.used_captcha
+    verify_body = json.loads([c for c in fake_session.calls if "/verify?" in c[1]][0][2]["data"])
+    assert verify_body["goku_props"]["key"] == "AQIDAHjFAKEKEY=="

@@ -125,7 +125,9 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
         client_key = body.get("clientKey")
         if client_key is None or client_key == "":
             raise SolverError(ERROR_KEY_DENIED_ACCESS, "clientKey is required")
-        if await run_in_threadpool(keys.lookup, client_key) is None:
+        # inline on purpose: lookup is cheap, and the threadpool may be busy with
+        # synchronous classifications - authentication must never queue behind them
+        if keys.lookup(client_key) is None:
             raise SolverError(ERROR_KEY_DENIED_ACCESS, "invalid clientKey")
         return body, client_key
 
@@ -149,7 +151,7 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
     @app.post("/getBalance")
     async def get_balance(request: Request) -> JSONResponse:
         body, client_key = await _authed_body(request)
-        balance = await run_in_threadpool(keys.balance, client_key)
+        balance = keys.balance(client_key)
         stats = await run_in_threadpool(usage.stats, client_key)
         return JSONResponse({"errorId": 0, "balance": balance, "packages": [], "usage": stats})
 

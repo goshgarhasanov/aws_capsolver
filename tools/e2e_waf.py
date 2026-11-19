@@ -21,19 +21,30 @@ import requests
 WAF_MARKERS = ("gokuProps", "captcha.awswaf.com", "AwsWafIntegration")
 
 
+def _post(service: str, path: str, body: dict) -> dict:
+    """POST to the service; transport failures become an error dict instead of a crash."""
+    try:
+        resp = requests.post(f"{service}{path}", json=body, timeout=30)
+        data = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        return {"errorId": 1, "errorCode": "CLIENT_ERROR",
+                "errorDescription": exc.__class__.__name__}
+    return data if isinstance(data, dict) else {"errorId": 1, "errorCode": "CLIENT_ERROR"}
+
+
 def solve(service: str, key: str, url: str, proxy: str = None, timeout: float = 180) -> dict:
     task = {"type": "AntiAwsWafTask" if proxy else "AntiAwsWafTaskProxyLess", "websiteURL": url}
     if proxy:
         task["proxy"] = proxy
-    created = requests.post(f"{service}/createTask", json={"clientKey": key, "task": task},
-                            timeout=30).json()
-    if created.get("errorId"):
+    created = _post(service, "/createTask", {"clientKey": key, "task": task})
+    if created.get("errorId") or not created.get("taskId"):
         return created
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         time.sleep(1.5)
-        res = requests.post(f"{service}/getTaskResult",
-                            json={"clientKey": key, "taskId": created["taskId"]}, timeout=30).json()
+        res = _post(service, "/getTaskResult", {"clientKey": key, "taskId": created["taskId"]})
+        if res.get("errorCode") == "CLIENT_ERROR":
+            continue  # transient: keep polling until the timeout
         if res.get("errorId") or res.get("status") in ("ready", "failed"):
             return res
     return {"errorId": 1, "errorCode": "CLIENT_TIMEOUT"}
@@ -69,19 +80,22 @@ def main() -> int:
     args = ap.parse_args()
 
     results = []
-    for n in range(1, min(args.attempts, 30) + 1):
+    for n in range(1, max(1, min(args.attempts, 30)) + 1):
         t0 = time.monotonic()
         res = solve(args.service, args.key, args.url, args.proxy)
         elapsed = time.monotonic() - t0
         ok = False
-        if res.get("status") == "ready":
-            sol = res["solution"]
-            ok = bool(sol.get("cookie")) and check_in_chrome(args.url, sol["cookie"],
-                                                             sol["userAgent"], not args.headed)
+        sol = res.get("solution") or {}
+        if res.get("status") == "ready" and sol.get("cookie"):
+            try:
+                ok = check_in_chrome(args.url, sol["cookie"], sol.get("userAgent") or "",
+                                     not args.headed)
+            except Exception as exc:  # browser problems must not abort the whole run
+                print(json.dumps({"attempt": n, "browser_error": exc.__class__.__name__}))
         results.append({"attempt": n, "ok": ok, "seconds": round(elapsed, 1),
                         "error": res.get("errorCode")})
         print(json.dumps(results[-1]), flush=True)
-        time.sleep(args.pause)
+        time.sleep(max(0.0, args.pause))
     good = [r["seconds"] for r in results if r["ok"]]
     print(json.dumps({"attempts": len(results), "success": len(good),
                       "success_rate": round(len(good) / len(results), 3),

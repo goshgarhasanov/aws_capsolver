@@ -109,6 +109,8 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
 
     while True:
         check_stop(deadline, cancel, "challenge")
+        if kinds is not None and all(k in tried for k in kinds):
+            raise last_error or SolverError(ERROR_CAPTCHA_UNSOLVABLE, "no PoW solver accepted")
         inputs = request_json(session, "GET", f"{token_base}/inputs", "challenge /inputs",
                               timeout, deadline, params={"client": "browser"}, headers=headers)
         challenge = inputs.get("challenge")

@@ -71,3 +71,126 @@ def test_hashcash_deadline():
     import time
     assert powlib.solve_hashcash("sha256", "x", "", 60, processes=2,
                                  deadline=time.monotonic() - 1) is None
+
+
+# --- cancellation, deadlines, pool robustness --------------------------------------------
+import multiprocessing  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from concurrent.futures.process import BrokenProcessPool  # noqa: E402
+
+from aws_capsolver.waf.challenge import compute_solution  # noqa: E402
+from aws_capsolver.waf.errors import SolverError  # noqa: E402
+
+
+@pytest.mark.parametrize("processes", [1, 2])
+def test_deadline_interrupts_a_running_search(processes):
+    t0 = time.monotonic()
+    found = powlib.solve_hashcash("sha256", "x", "", 60, processes=processes,
+                                  deadline=t0 + 0.4)
+    assert found is None
+    assert time.monotonic() - t0 < 3.0
+
+
+@pytest.mark.parametrize("processes", [1, 2])
+def test_cancel_event_interrupts_a_running_search(processes):
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    t0 = time.monotonic()
+    assert powlib.solve_hashcash("sha256", "x", "", 60, processes=processes,
+                                 cancel=cancel) is None
+    assert time.monotonic() - t0 < 3.0
+
+
+def test_compute_solution_reports_why_it_stopped():
+    with pytest.raises(SolverError) as err:
+        compute_solution("sha256", {"input": "x"}, 60, 128, 1, deadline=time.monotonic() - 1)
+    assert err.value.code == "ERROR_TASK_TIMEOUT"
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(SolverError) as err:
+        compute_solution("sha256", {"input": "x"}, 60, 128, 1, cancel=cancel)
+    assert err.value.code == "ERROR_SERVICE_UNAVAILABLE"
+
+
+def test_pool_unavailable_falls_back_to_sequential(monkeypatch):
+    def broken(_):
+        raise powlib._PoolUnavailable("no processes here")
+
+    monkeypatch.setattr(powlib, "_get_pool", broken)
+    assert powlib.solve_hashcash("sha256", "challenge-x", "", 17, processes=4) == \
+        _reference("sha256", "challenge-x", "", 17)
+
+
+def test_pool_breaking_mid_search_resumes_sequentially(monkeypatch):
+    class FlakyPool:
+        """Accepts the first batch (no hit), then breaks like a crashed worker."""
+        calls = 0
+        _broken = False
+
+        def submit(self, fn, *args):
+            FlakyPool.calls += 1
+            if FlakyPool.calls > 2:
+                raise BrokenProcessPool("worker died")
+            from concurrent.futures import Future
+            f = Future()
+            f.set_result(fn(*args))
+            return f
+
+        def shutdown(self, **kw):
+            pass
+
+    monkeypatch.setitem(powlib.CHUNK, "sha256", 1000)
+    monkeypatch.setattr(powlib, "_get_pool", lambda n: FlakyPool())
+    expected = _reference("sha256", "challenge-x", "", 17)
+    assert int(expected) > 2000  # the answer lies beyond the batch the pool handled
+    assert powlib.solve_hashcash("sha256", "challenge-x", "", 17, processes=2) == expected
+
+
+def test_pool_is_shared_and_shuts_down_cleanly():
+    powlib.solve_hashcash("sha256", "challenge-x", "", 17, processes=2)
+    first = powlib._pool
+    powlib.solve_hashcash("sha256", "challenge-y", "", 16, processes=2)
+    assert powlib._pool is first and first is not None
+    powlib.shutdown_pool(wait=True)
+    assert powlib._pool is None
+    assert multiprocessing.active_children() == []  # no zombie workers left behind
+
+
+def test_pool_never_uses_fork():
+    assert powlib._mp_context().get_start_method() in ("forkserver", "spawn")
+
+
+def test_concurrent_searches_share_the_pool():
+    results, errors = [], []
+
+    def run(seed):
+        try:
+            results.append((seed, powlib.solve_hashcash("sha256", seed, "", 16, processes=2)))
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(f"seed-{i}",)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert not errors
+    for seed, found in results:
+        assert found == _reference("sha256", seed, "", 16)
+    powlib.shutdown_pool(wait=True)
+
+
+@pytest.mark.parametrize("difficulty", [True, 65, "8", None, 1.5])
+def test_bad_difficulty_types(difficulty):
+    with pytest.raises(ValueError):
+        powlib.solve_hashcash("sha256", "x", "", difficulty)
+
+
+def test_bad_scrypt_memory_and_kind():
+    with pytest.raises(ValueError):
+        powlib.solve_hashcash("scrypt", "x", "", 4, memory=100)
+    with pytest.raises(ValueError):
+        powlib.solve_hashcash("md5", "x", "", 4)
+    with pytest.raises(ValueError):
+        powlib.solve_bandwidth(True)
