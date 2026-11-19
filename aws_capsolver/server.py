@@ -1,5 +1,6 @@
 """CapSolver-compatible HTTP API (createTask / getTaskResult / getBalance)."""
 
+import asyncio
 import json
 import logging
 import threading
@@ -13,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__, vision_bridge
 from .config import KeyStore, Settings, UsageStore
-from .tasks import Task, TaskManager
+from .tasks import TASK_CLASSIFY, Task, TaskManager
 from .waf import pow as powlib
 from .waf.errors import (ERROR_INVALID_TASK_DATA, ERROR_KEY_DENIED_ACCESS,
                          ERROR_SERVICE_UNAVAILABLE, SolverError)
@@ -136,11 +137,32 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
         body, client_key = await _authed_body(request)
         if "task" not in body:
             raise SolverError(ERROR_INVALID_TASK_DATA, "task is required")
-        # task creation may block (synchronous classification) - keep it off the event loop
-        task = await run_in_threadpool(manager.create, client_key, body.get("task"))
+        payload = body.get("task")
+        if isinstance(payload, dict) and payload.get("type") == TASK_CLASSIFY:
+            task = await _classify(client_key, payload)
+        else:
+            # validation + queueing only; it still touches SQLite, so keep it off the loop
+            task = await run_in_threadpool(manager.create, client_key, payload)
         if task.status in ("ready", "failed"):
             return JSONResponse(_task_json(task))
         return JSONResponse({"errorId": 0, "taskId": task.id})
+
+    async def _classify(client_key: str, payload: Dict[str, Any]) -> Task:
+        """
+        Synchronous classification: the vision call runs on the manager's dedicated
+        executor and is awaited here without holding any threadpool thread, so a
+        classification backlog never delays authentication or getTaskResult.
+        """
+        task, future = manager.submit_classification(client_key, payload)
+        if future is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(asyncio.wrap_future(future)),
+                                       timeout=settings.classify_timeout)
+            except asyncio.TimeoutError:
+                pass  # finish_classification records the timeout and cancels if queued
+            except Exception:  # the outcome is read from the future itself
+                pass
+        return manager.finish_classification(task, future)
 
     @app.post("/getTaskResult")
     async def get_task_result(request: Request) -> JSONResponse:
@@ -158,6 +180,7 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
     @app.get("/health")
     async def health() -> Dict[str, Any]:
         return {"ok": not manager.closed, "version": __version__,
-                "vision": vision_bridge.available(), "time": int(time.time())}
+                "vision": vision_bridge.available(), "time": int(time.time()),
+                "load": manager.stats()}
 
     return app

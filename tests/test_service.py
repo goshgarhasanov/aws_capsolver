@@ -457,3 +457,129 @@ def test_settings_from_env(monkeypatch):
     assert s.max_body_bytes == 1024 and s.verify_token is False
     monkeypatch.delenv("AWSCS_ALLOW_PRIVATE")
     assert Settings.from_env().allow_private is False
+
+
+# --- classification admission control -----------------------------------------------------
+def _cls_task():
+    return {"type": "AwsWafClassification", "images": [jpeg_b64()] * 9,
+            "question": "aws:grid:bed"}
+
+
+def _blocking_vision(monkeypatch, gate, calls):
+    def classify_grid(images, target, count=None):
+        calls.append(time.monotonic())
+        gate.wait(10)
+        return [1]
+
+    monkeypatch.setattr(vision_bridge, "classify_grid", classify_grid)
+
+
+def _wait_for(predicate, limit=5.0):
+    end = time.monotonic() + limit
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_classify_queue_full_answers_no_slot_immediately(make_client, monkeypatch):
+    gate, calls = threading.Event(), []
+    _blocking_vision(monkeypatch, gate, calls)
+    client = make_client(vision_concurrency=1, max_classify_queue=1, classify_timeout=10)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(_create(client, _cls_task())))
+               for _ in range(2)]
+    for t in threads:
+        t.start()
+    assert _wait_for(lambda: client.manager.stats()["classify_queued"] == 1
+                     and client.manager.stats()["classify_running"] == 1)
+    t0 = time.monotonic()
+    full = _create(client, _cls_task())
+    assert time.monotonic() - t0 < 1.0
+    assert full == {"errorId": 1, "errorCode": "ERROR_NO_SLOT_AVAILABLE",
+                    "errorDescription": "classification queue is full"}
+    load = client.get("/health").json()["load"]
+    assert load["classify_running"] == 1 and load["classify_queued"] == 1
+    assert load["classify_capacity"] == 2
+    gate.set()
+    for t in threads:
+        t.join(10)
+    assert [r["solution"] for r in results] == [{"objects": [1]}] * 2
+    stats = client.manager.stats()
+    assert stats["classify_queued"] == stats["classify_running"] == 0
+
+
+def test_stale_queued_classification_never_reaches_vision(make_client, monkeypatch):
+    calls = []
+
+    def slow(images, target, count=None):
+        calls.append(1)
+        time.sleep(0.6)
+        return [1]
+
+    monkeypatch.setattr(vision_bridge, "classify_grid", slow)
+    client = make_client(vision_concurrency=1, classify_timeout=0.3)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(_create(client, _cls_task())))
+               for _ in range(3)]
+    for t in threads:
+        t.start()
+        time.sleep(0.02)
+    for t in threads:
+        t.join(10)
+    assert [r["errorCode"] for r in results] == ["ERROR_TASK_TIMEOUT"] * 3
+    assert _wait_for(lambda: client.manager.stats()["classify_running"] == 0, 3)
+    time.sleep(0.1)
+    assert len(calls) == 1  # the two queued ones expired while waiting and were skipped
+    assert client.manager.stats()["classify_queued"] == 0
+
+
+def test_api_stays_responsive_under_classification_backlog(make_client, monkeypatch):
+    gate, calls = threading.Event(), []
+    _blocking_vision(monkeypatch, gate, calls)
+    # more blocked classifications than Starlette's default threadpool (40 threads)
+    client = make_client(vision_concurrency=1, max_classify_queue=60, classify_timeout=10)
+    waf = make_client(lambda req, s, deadline=None: SolveOutcome("T", "UA"))
+    threads = [threading.Thread(target=_create, args=(client, _cls_task())) for _ in range(45)]
+    for t in threads:
+        t.start()
+    try:
+        assert _wait_for(lambda: client.manager.stats()["classify_queued"] == 44)
+        t0 = time.monotonic()
+        assert client.post("/getBalance", json={"clientKey": KEY}).json()["errorId"] == 0
+        assert _result(client, "missing")["errorCode"] == "ERROR_TASKID_INVALID"
+        assert client.get("/health").json()["load"]["classify_queued"] == 44
+        assert time.monotonic() - t0 < 2.0
+        # WAF task creation is not stuck behind vision (fake solver: no network)
+        assert _poll(waf, _create(waf, WAF)["taskId"])["status"] == "ready"
+    finally:
+        gate.set()
+        for t in threads:
+            t.join(15)
+    assert len(calls) == 45
+
+
+def test_classification_validation_does_not_take_a_slot(make_client, monkeypatch):
+    gate, calls = threading.Event(), []
+    _blocking_vision(monkeypatch, gate, calls)
+    client = make_client(vision_concurrency=1, max_classify_queue=0)
+    res = _create(client, {"type": "AwsWafClassification", "images": ["%%%"],
+                           "question": "aws:grid:bed"})
+    assert res["errorCode"] == "ERROR_INVALID_TASK_DATA" and "taskId" not in res
+    assert client.manager.stats()["classify_queued"] == 0
+    gate.set()
+
+
+def test_classify_settings_from_env(monkeypatch):
+    monkeypatch.setenv("AWSCS_VISION_CONCURRENCY", "2")
+    s = Settings.from_env()
+    assert s.vision_concurrency == 2 and s.classify_queue_limit == 16
+    monkeypatch.setenv("AWSCS_MAX_CLASSIFY_QUEUE", "3")
+    assert Settings.from_env().classify_queue_limit == 3
+    monkeypatch.setenv("AWSCS_MAX_CLASSIFY_QUEUE", "0")
+    assert Settings.from_env().classify_queue_limit == 0
+    monkeypatch.setenv("AWSCS_VISION_CONCURRENCY", "0")
+    monkeypatch.setenv("AWSCS_MAX_CLASSIFY_QUEUE", "junk")
+    s = Settings.from_env()
+    assert s.vision_concurrency == 1 and s.classify_queue_limit == 8

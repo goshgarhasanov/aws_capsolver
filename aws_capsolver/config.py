@@ -59,6 +59,8 @@ class Settings:
     task_ttl: float = 600.0         # finished tasks are forgotten after this
     http_timeout: float = 20.0      # per network call
     classify_timeout: float = 60.0  # synchronous AwsWafClassification limit
+    vision_concurrency: int = 1     # classifications running at once (the model serialises)
+    max_classify_queue: Optional[int] = None  # waiting classifications; None = derived
     pow_processes: Optional[int] = None
     captcha_rounds: int = 5
     verify_token: bool = True
@@ -68,6 +70,13 @@ class Settings:
     max_body_bytes: int = 4 * 1024 * 1024  # request body limit (16 images of 2 MB won't fit)
     default_balance: float = 1000.0
     extra_keys: Dict[str, dict] = field(default_factory=dict)
+
+    @property
+    def classify_queue_limit(self) -> int:
+        """Waiting classifications allowed beyond the running ones (default 8 per runner)."""
+        if self.max_classify_queue is not None:
+            return max(0, self.max_classify_queue)
+        return 8 * max(1, self.vision_concurrency)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -80,6 +89,10 @@ class Settings:
         s.task_ttl = _env_float("AWSCS_TASK_TTL", s.task_ttl, minimum=1.0)
         s.http_timeout = _env_float("AWSCS_HTTP_TIMEOUT", s.http_timeout)
         s.classify_timeout = _env_float("AWSCS_CLASSIFY_TIMEOUT", s.classify_timeout)
+        s.vision_concurrency = max(1, _env_int("AWSCS_VISION_CONCURRENCY",
+                                                s.vision_concurrency))
+        queue = _env_int("AWSCS_MAX_CLASSIFY_QUEUE", -1)
+        s.max_classify_queue = queue if queue >= 0 else None
         procs = _env_int("AWSCS_POW_PROCESSES", 0)
         s.pow_processes = procs if procs > 0 else None
         s.captcha_rounds = max(1, _env_int("AWSCS_CAPTCHA_ROUNDS", s.captcha_rounds))

@@ -258,12 +258,14 @@ when it changes):
 | `AWSCS_KEYS` | | comma-separated extra keys |
 | `AWSCS_OPEN_ACCESS` | `0` | accept any key (local dev only; same as `serve --open`) |
 | `AWSCS_USAGE_DB` | `data/usage.db` | SQLite per-key counters |
-| `AWSCS_WORKERS` | `8` | concurrent WAF tasks (classification uses `max(2, workers/2)` threads) |
+| `AWSCS_WORKERS` | `8` | concurrent WAF tasks (classification has its own runners, see `AWSCS_VISION_CONCURRENCY`) |
 | `AWSCS_MAX_PENDING` | `200` | queued + running tasks before `ERROR_NO_SLOT_AVAILABLE` |
 | `AWSCS_TASK_TIMEOUT` | `120` | hard limit per WAF task, seconds |
 | `AWSCS_TASK_TTL` | `600` | finished tasks are forgotten after this |
 | `AWSCS_HTTP_TIMEOUT` | `20` | per network call |
 | `AWSCS_CLASSIFY_TIMEOUT` | `60` | synchronous classification limit |
+| `AWSCS_VISION_CONCURRENCY` | `1` | classifications running at once on the dedicated vision executor (the model serialises calls, so more rarely helps) |
+| `AWSCS_MAX_CLASSIFY_QUEUE` | `8 × AWSCS_VISION_CONCURRENCY` | classifications allowed to wait; beyond running + waiting, `createTask` answers `ERROR_NO_SLOT_AVAILABLE` at once. A request that expires while waiting is never run |
 | `AWSCS_POW_PROCESSES` | CPU count | hashcash worker processes |
 | `AWSCS_CAPTCHA_ROUNDS` | `5` | puzzles to attempt before giving up |
 | `AWSCS_VERIFY_TOKEN` | `1` | re-fetch the page with the PoW token to detect a CAPTCHA action |

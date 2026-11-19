@@ -8,10 +8,10 @@ import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from . import vision_bridge
@@ -123,8 +123,8 @@ def _decode_image(value: Any, index: int) -> bytes:
     return data
 
 
-def classify(task: Dict[str, Any]) -> Dict[str, Any]:
-    """AwsWafClassification: answer one already-fetched problem."""
+def parse_classification(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
+    """Validate an AwsWafClassification payload -> (family, target, decoded images)."""
     question = _opt_str(task, "question")
     images = task.get("images")
     if not question or not isinstance(images, list) or not images:
@@ -137,11 +137,20 @@ def classify(task: Dict[str, Any]) -> Dict[str, Any]:
     _, family, target = parts
     if family not in ("grid", "toycarcity"):
         raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"question family {family!r} is not supported")
-    decoded = [_decode_image(v, i) for i, v in enumerate(images)]
+    if family == "grid" and not target:
+        raise SolverError(ERROR_INVALID_TASK_DATA, "grid question without a target")
+    return family, target, [_decode_image(v, i) for i, v in enumerate(images)]
+
+
+def classify(task: Dict[str, Any]) -> Dict[str, Any]:
+    """AwsWafClassification: answer one already-fetched problem."""
+    return run_classification(*parse_classification(task))
+
+
+def run_classification(family: str, target: str, decoded: List[bytes]) -> Dict[str, Any]:
+    """The vision call for a validated classification."""
     try:
         if family == "grid":
-            if not target:
-                raise SolverError(ERROR_INVALID_TASK_DATA, "grid question without a target")
             objects = sorted({int(i) for i in vision_bridge.classify_grid(decoded, target)})
             if not objects or any(i < 0 or i >= len(decoded) for i in objects):
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"classifier returned {objects}")
@@ -179,9 +188,13 @@ class TaskManager:
         self._cancel = threading.Event()
         self._pool = ThreadPoolExecutor(max_workers=settings.workers,
                                         thread_name_prefix="solver")
-        # classification is synchronous for the client; keep it off the WAF queue
-        self._classify_pool = ThreadPoolExecutor(max_workers=max(2, settings.workers // 2),
+        # classification is synchronous for the client; it gets its own bounded executor
+        # (vision_concurrency runners) and an admission cap on runners + waiting jobs, so
+        # an overload is answered at once with ERROR_NO_SLOT_AVAILABLE instead of timing out
+        self._classify_pool = ThreadPoolExecutor(max_workers=settings.vision_concurrency,
                                                  thread_name_prefix="classify")
+        self._classify_waiting = 0
+        self._classify_running = 0
         self._solver_settings = SolverSettings(
             http_timeout=settings.http_timeout, pow_processes=settings.pow_processes,
             captcha_rounds=settings.captcha_rounds, verify_token=settings.verify_token,
@@ -295,29 +308,113 @@ class TaskManager:
         return self._snapshot(task)
 
     def _create_classification(self, client_key: str, payload: Dict[str, Any]) -> Task:
-        task = self._register(client_key, TASK_CLASSIFY)
-        self._start(task)
+        """Blocking variant (CLI, tests); the API awaits the future without a thread."""
+        task, future = self.submit_classification(client_key, payload)
+        if future is not None:
+            try:
+                future.result(timeout=self.settings.classify_timeout)
+            except FutureTimeout:
+                pass
+            except BaseException:  # reported by finish_classification
+                pass
+        return self.finish_classification(task, future)
+
+    def submit_classification(self, client_key: str, payload: Any
+                              ) -> Tuple[Task, Optional[Future]]:
+        """
+        Admit and queue one classification. Raises ERROR_NO_SLOT_AVAILABLE when the
+        runners and the queue are full. Returns the task and the future of the vision call
+        (None when it could not be queued; the task is then already finished).
+        """
+        if self.closed:
+            raise SolverError(ERROR_SERVICE_UNAVAILABLE, "service is shutting down")
+        if not isinstance(payload, dict):
+            raise SolverError(ERROR_INVALID_TASK_DATA, "task must be an object")
+        job = parse_classification(payload)  # bad input never takes a queue slot
+        capacity = self.settings.vision_concurrency + self.settings.classify_queue_limit
+        with self._lock:
+            if self._classify_waiting + self._classify_running >= capacity:
+                raise SolverError(ERROR_NO_SLOT_AVAILABLE, "classification queue is full")
+            self._classify_waiting += 1  # reserve the slot before registering
         try:
-            future = self._classify_pool.submit(classify, payload)
+            task = self._register(client_key, TASK_CLASSIFY)
+        except BaseException:
+            with self._lock:
+                self._classify_waiting -= 1
+            raise
+        self._start(task)
+        deadline = task.created + self.settings.classify_timeout
+        try:
+            future = self._classify_pool.submit(self._run_classification, task, job,
+                                                deadline)
         except RuntimeError:
+            with self._lock:
+                self._classify_waiting -= 1
             self._finish(task, error=SolverError(ERROR_SERVICE_UNAVAILABLE,
                                                  "service is shutting down"))
-            return self._snapshot(task)
+            return self._snapshot(task), None
+        future.add_done_callback(self._release_if_cancelled)
+        return task, future
+
+    def _release_if_cancelled(self, future: Future) -> None:
+        if future.cancelled():  # never started: give its queue slot back
+            with self._lock:
+                self._classify_waiting -= 1
+
+    def _run_classification(self, task: Task, job: Tuple[str, str, List[bytes]],
+                            deadline: float) -> Dict[str, Any]:
+        with self._lock:
+            self._classify_waiting -= 1
+            stale = time.monotonic() >= deadline or task.status != "processing"
+            if not stale:
+                self._classify_running += 1
+        if stale:  # the client already got its timeout: do not spend CPU on it
+            raise SolverError(ERROR_TASK_TIMEOUT, "classification waited too long in the queue")
         try:
-            solution = future.result(timeout=self.settings.classify_timeout)
-        except SolverError as exc:
-            self._finish(task, error=exc)
-        except FutureTimeout:
+            return run_classification(*job)
+        finally:
+            with self._lock:
+                self._classify_running -= 1
+
+    def finish_classification(self, task: Task, future: Optional[Future]) -> Task:
+        """Record the outcome of `future` (timed out when it is not done yet)."""
+        if future is None:
+            return self._snapshot(task)
+        if not future.done():
             future.cancel()  # drop it if it never started; a running call cannot be stopped
             self._finish(task, error=SolverError(ERROR_TASK_TIMEOUT, "classification timed out"))
-        except Exception as exc:  # a vision bug must not leave the task processing forever
+            return self._snapshot(task)
+        if future.cancelled():
+            self._finish(task, error=SolverError(ERROR_SERVICE_UNAVAILABLE,
+                                                 "classification was cancelled"))
+            return self._snapshot(task)
+        exc = future.exception()
+        if exc is None:
+            self._finish(task, solution=future.result())
+        elif isinstance(exc, SolverError):
+            self._finish(task, error=exc)
+        else:  # a vision bug must not leave the task processing forever
             logger.error("classification task %s crashed: %s", task.id,
                          redact("".join(traceback.format_exception(exc))))
             self._finish(task, error=SolverError(
                 ERROR_CAPTCHA_UNSOLVABLE, f"internal error: {exc.__class__.__name__}"))
-        else:
-            self._finish(task, solution=solution)
         return self._snapshot(task)
+
+    def stats(self) -> Dict[str, int]:
+        """Load figures for /health."""
+        with self._lock:
+            active = [t for t in self._tasks.values() if t.status in ("idle", "processing")]
+            return {
+                "tasks_active": len(active),
+                "waf_queued": sum(1 for t in active if t.type != TASK_CLASSIFY
+                                  and t.status == "idle"),
+                "waf_running": sum(1 for t in active if t.type != TASK_CLASSIFY
+                                   and t.status == "processing"),
+                "classify_queued": self._classify_waiting,
+                "classify_running": self._classify_running,
+                "classify_capacity": (self.settings.vision_concurrency
+                                      + self.settings.classify_queue_limit),
+            }
 
     def _run_waf(self, task: Task, request: SolveRequest) -> None:
         deadline = self._deadline(task)

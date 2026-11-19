@@ -124,3 +124,31 @@ def fake_dns(monkeypatch):
 
     monkeypatch.setattr(httpmod, "_resolve", resolve)
     return table
+
+
+@pytest.fixture(autouse=True)
+def no_network(request, monkeypatch):
+    """
+    Fail any TCP connection to a non-loopback address, so protocol/service tests can
+    never reach a real site. The model tests (vision/audio) may fetch weights and are
+    left alone.
+    """
+    if request.node.path.name in ("test_vision.py", "test_audio.py"):
+        return
+    import ipaddress
+    import socket
+
+    real_connect = socket.socket.connect
+
+    def guarded(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            host = address[0]
+            try:
+                local = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                local = host == "localhost"
+            if not local:
+                raise OSError(f"network access disabled in tests: {host}")
+        return real_connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded)
