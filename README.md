@@ -374,18 +374,22 @@ unless `--allow-remote`) and reports p50 / p95 latency and throughput per concur
 .venv/bin/python tools/loadtest.py --levels 1,8 --requests 50 --json
 ```
 
-Measured 2026-11-20 on the development machine (32 vCPUs, shared with other jobs - load
-average about 26 during the run; default backbones, no head file, warm model):
+Measured 2026-11-20 on the development machine (32 vCPUs, heavily shared with other jobs:
+load average 26-48 during the runs; default backbones, no head file, warm model). Two runs,
+before and after the service hardening commit:
 
-| concurrency | requests | p50 | p95 | throughput |
-|---|---|---|---|---|
-| 1 | 4 | 2.10 s | 2.25 s | 0.48 req/s |
-| 4 | 16 | 8.97 s | 9.12 s | 0.45 req/s |
-| 16 | 64 | 32.7 s | 40.8 s | 0.47 req/s |
+| concurrency | requests | p50 | p95 | throughput | errors |
+|---|---|---|---|---|---|
+| 1 | 4 | 2.10 s / 3.69 s | 2.25 s / 3.86 s | 0.48 / 0.28 req/s | - |
+| 4 | 16 | 8.97 s / 13.7 s | 9.12 s / 14.4 s | 0.45 / 0.29 req/s | - |
+| 16 | 64 | 32.7 s / 49.5 s | 40.8 s / 59.1 s | 0.47 / 0.10 req/s | 0 / 40 x `ERROR_TASK_TIMEOUT` |
 
 Throughput is flat: classifications run one at a time, so latency grows linearly with the
-queue. At concurrency 16 the p95 approaches `AWSCS_CLASSIFY_TIMEOUT` (60 s); keep the
-number of concurrent classification clients per instance low or raise the timeout.
+queue. Once the queue wait exceeds `AWSCS_CLASSIFY_TIMEOUT` (60 s) requests fail with
+`ERROR_TASK_TIMEOUT`, and the timed-out classifications still occupy the CPU, which drags
+down the rest. Keep concurrent classification clients per instance at about
+`AWSCS_CLASSIFY_TIMEOUT / single-request latency` (for example at most 8-10 here), or
+add instances. Re-measure on the production host with `tools/loadtest.py`.
 
 ## Retraining the models
 

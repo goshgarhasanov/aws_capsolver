@@ -45,7 +45,7 @@ jobs:
         run: python -m compileall -q aws_capsolver tools clients/python
 
       - name: Tests
-        run: python -m pytest -q -rs
+        run: python -m pytest -rs   # addopts already sets -q
 
       - name: Smoke test the server and the Python client
         run: |
