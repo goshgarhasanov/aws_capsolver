@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import logging
@@ -58,27 +59,42 @@ def load_clip(cid: str):
     return A.decode_audio((CLIPS / cid / "audio.aac").read_bytes())
 
 
-def segments_of(x):
+def segments_of(x, params=A.DEFAULT_SEG):
+    """(segments, template score, relative dB envelope) for one clip."""
     end, score = A.locate_instruction(x)
     if score < A.MIN_TEMPLATE_SCORE:
-        return [], score
-    return A.find_word_segments(x, end, A.reference_level(x, end)), score
+        return [], score, None
+    ref = A.reference_level(x, end)
+    return A.find_word_segments(x, end, ref, params), score, A.relative_db(x, ref)
+
+
+def make_solver(args) -> A.AudioSolver:
+    overrides = {}
+    for item in getattr(args, "seg", None) or []:
+        key, _, value = item.partition("=")
+        overrides[key] = float(value)
+    return A.AudioSolver(args.model, cpu_threads=args.threads, beam_size=args.beam,
+                         window_s=args.window if args.window > 0 else None,
+                         seg=dataclasses.replace(A.DEFAULT_SEG, **overrides))
 
 
 def cmd_transcribe(args) -> None:
     RUNS.mkdir(parents=True, exist_ok=True)
-    out_path = RUNS / f"{args.model}.json"
+    tag = args.model if args.window <= 0 else f"{args.model}@{args.window:g}s"
+    out_path = RUNS / f"{tag}.json"
     done = json.loads(out_path.read_text()) if out_path.exists() else {}
-    solver = A.AudioSolver(args.model, cpu_threads=args.threads, beam_size=args.beam)
+    solver = make_solver(args)
     for i, cid in enumerate(clip_ids()):
         if cid in done:
             continue
         x = load_clip(cid)
-        segs, score = segments_of(x)
+        segs, score, rel = segments_of(x, solver.seg)
         t0 = time.monotonic()
         rows = []
-        for s in segs:
-            c = solver._decode(A.cut_segment(x, s)[0])
+        clips = [A.cut_segment(x, s, rel, solver.seg)[0] for s in segs]
+        decoded = solver._decode_batch(clips) if solver.window_s else \
+            [solver._decode(c) for c in clips]
+        for s, c in zip(segs, decoded):
             rows.append({"start": round(s.start / A.SR, 2), "dur": round(s.seconds, 2),
                          "peak": round(s.peak_db, 1), "text": c.text,
                          "logprob": round(c.logprob, 3), "no_speech": round(c.no_speech, 3)})
@@ -101,7 +117,7 @@ def cmd_label(args) -> None:
         nseg = {len(r[cid]["segments"]) for r in runs.values()}
         words = set()
         for k in range(max(nseg)):
-            votes = Counter(r[cid]["segments"][k]["text"] for r in runs.values()
+            votes = Counter(A.normalise(r[cid]["segments"][k]["text"]) for r in runs.values()
                             if k < len(r[cid]["segments"]))
             text, n = votes.most_common(1)[0]
             if n >= args.min_agree and len(text.split()) == 1:
@@ -128,7 +144,7 @@ def cmd_eval(args) -> None:
            (args.split == "all" or v["split"] == args.split)]
     if args.limit:
         ids = ids[: args.limit]
-    solver = A.AudioSolver(args.model, cpu_threads=args.threads, beam_size=args.beam)
+    solver = make_solver(args)
     solver.solve(load_clip(ids[0]))  # warm-up
     ok, times, wrong = 0, [], []
     for cid in ids:
@@ -141,7 +157,8 @@ def cmd_eval(args) -> None:
         else:
             wrong.append((cid, answer, labels[cid]["words"]))
     n = len(ids)
-    print(f"model={args.model} beam={args.beam} threads={args.threads} split={args.split}: "
+    print(f"model={args.model} window={args.window:g}s beam={args.beam} threads={args.threads} "
+          f"split={args.split}: "
           f"{ok}/{n} = {100 * ok / max(n, 1):.1f}%  latency mean {statistics.mean(times):.2f}s "
           f"p95 {sorted(times)[int(0.95 * (n - 1))]:.2f}s max {max(times):.2f}s")
     for w in wrong:
@@ -166,6 +183,8 @@ def main() -> None:
     p.add_argument("--model", required=True)
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--beam", type=int, default=5)
+    p.add_argument("--window", type=float, default=0.0,
+                   help="encoder window in seconds; 0 = stock faster-whisper pipeline")
     p = sub.add_parser("label")
     p.add_argument("--models", nargs="+", required=True)
     p.add_argument("--min-agree", type=int, default=2)
@@ -175,6 +194,8 @@ def main() -> None:
     p.add_argument("--threads", type=int, default=A.CPU_THREADS)
     p.add_argument("--beam", type=int, default=5)
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--window", type=float, default=A.WINDOW_S)
+    p.add_argument("--seg", nargs="*", help="SegParams overrides, e.g. duck_gain_db=-12")
     p = sub.add_parser("show")
     p.add_argument("clip")
     args = ap.parse_args()

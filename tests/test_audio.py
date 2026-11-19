@@ -145,7 +145,7 @@ def test_real_sample_has_two_word_segments():
     end, _ = A.locate_instruction(x)
     segs = A.find_word_segments(x, end, A.reference_level(x, end))
     assert len(segs) == 2
-    assert all(s.start >= end and A.MIN_WORD_S <= s.seconds <= A.MAX_WORD_S for s in segs)
+    assert all(s.start >= end and A.DEFAULT_SEG.min_s <= s.seconds <= A.DEFAULT_SEG.max_s for s in segs)
 
 
 def test_find_word_segments_on_synthetic_bursts():
@@ -179,6 +179,12 @@ def test_cut_segment_pads_and_reports_offset():
     ("e\u0301clair", "\u00e9clair"),
     ("...", ""),
     ("Next year,", "next year"),
+    ("Dr.", "doctor"),
+    ("Wall St.", "wall street"),
+    ("7", "seven"),
+    ("42", "forty two"),
+    ("1,000", "one thousand"),
+    ("1000", "one thousand"),
 ])
 def test_normalise(raw, expected):
     assert A.normalise(raw) == expected

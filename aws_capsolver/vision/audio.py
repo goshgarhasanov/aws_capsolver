@@ -20,6 +20,19 @@ the user only has to type ONE of the two words. So the solver:
 
 If the template is not found (a new instruction recording / locale), it falls back to a
 whole-clip transcription with word timestamps and loudness filtering.
+
+Model download and offline use
+------------------------------
+The CTranslate2 model is fetched once from the Hugging Face hub (Systran/faster-whisper-*)
+into the standard cache (~/.cache/huggingface/hub, or $HF_HOME). Pre-fetch it with
+
+    python -c "from faster_whisper.utils import download_model as d; d('small.en')"
+
+and run with HF_HUB_OFFLINE=1 afterwards. AWS_CAPSOLVER_AUDIO_MODEL accepts a model size
+name (tiny.en ... large-v3) or a path to a local CTranslate2 model directory;
+AWS_CAPSOLVER_AUDIO_THREADS sets the CPU threads. The model is loaded lazily, once, behind
+a lock; inference calls are serialised on the model (one CTranslate2 call at a time).
+Decoding uses PyAV, which bundles the ffmpeg libraries (no ffmpeg binary or subprocess).
 """
 from __future__ import annotations
 
@@ -71,13 +84,9 @@ _INSTRUCTION_DB = (
 _INSTRUCTION_END = 254 * HOP  # samples from template start to the end of "me"
 MIN_TEMPLATE_SCORE = 0.6
 
-# segmentation of the foreground words (dB relative to the instruction's loud level)
-WORD_THRESHOLD_DB = -12.0
-WORD_PEAK_DB = -5.0
-MERGE_GAP_S = 0.18
-MIN_WORD_S = 0.12
-MAX_WORD_S = 1.6
 PAD_S = 0.08
+WINDOW_S = float(os.environ.get("AWS_CAPSOLVER_AUDIO_WINDOW", "4"))  # encoder window (s)
+MAX_SEGMENTS = 4
 SIL_S = 0.4
 
 
@@ -175,41 +184,87 @@ class Segment:
         return (self.end - self.start) / SR
 
 
-def find_word_segments(x: np.ndarray, instr_end: int, ref_level: float) -> List[Segment]:
-    """Loud runs after the instruction: the two foreground words (plus rare false hits)."""
-    from scipy.ndimage import uniform_filter1d
+@dataclass(frozen=True)
+class SegParams:
+    """Thresholds (dB relative to the instruction voice) for finding the foreground words.
 
-    env = envelope(x)
-    db = 20 * np.log10(env + 1e-9) - 20 * np.log10(ref_level + 1e-9)
-    db = uniform_filter1d(db, 5)
-    first = int(np.ceil(instr_end / HOP)) + 3
-    loud = db > WORD_THRESHOLD_DB
-    loud[:first] = False
+    A word is a run of frames above ``core_db`` (runs closer than ``merge_gap_s`` are
+    joined), widened by at most ``edge_s`` on each side while above ``edge_db``. The
+    neighbour sits around -20..-10 dB, the foreground words peak near 0 dB.
+    """
+    core_db: float = -9.0
+    edge_db: float = -14.0
+    edge_s: float = 0.10
+    merge_gap_s: float = 0.25
+    peak_db: float = -5.0
+    min_s: float = 0.12
+    max_s: float = 1.6
+    duck_below_db: float = -14.0   # inside a cut, frames quieter than this are ...
+    duck_gain_db: float = 0.0      # ... attenuated by this much (0 = no ducking)
+
+
+DEFAULT_SEG = SegParams()
+
+
+def _runs(mask: np.ndarray, start: int) -> List[List[int]]:
     runs: List[List[int]] = []
-    i = first
-    while i < len(loud):
-        if loud[i]:
+    i = start
+    n = len(mask)
+    while i < n:
+        if mask[i]:
             j = i
-            while j < len(loud) and loud[j]:
+            while j < n and mask[j]:
                 j += 1
-            if runs and i - runs[-1][1] <= MERGE_GAP_S * SR / HOP:
-                runs[-1][1] = j
-            else:
-                runs.append([i, j])
+            runs.append([i, j])
             i = j
         else:
             i += 1
+    return runs
+
+
+def relative_db(x: np.ndarray, ref_level: float) -> np.ndarray:
+    """Smoothed 10 ms frame level in dB relative to the instruction voice."""
+    from scipy.ndimage import uniform_filter1d
+
+    db = 20 * np.log10(envelope(x) + 1e-9) - 20 * np.log10(ref_level + 1e-9)
+    return uniform_filter1d(db, 5)
+
+
+def find_word_segments(x: np.ndarray, instr_end: int, ref_level: float,
+                       params: SegParams = DEFAULT_SEG) -> List[Segment]:
+    """Loud runs after the instruction: the two foreground words (plus rare false hits)."""
+    env = envelope(x)
+    db = relative_db(x, ref_level)
+    first = int(np.ceil(instr_end / HOP)) + 3
+    if first >= len(db):
+        return []
+    fps = SR / HOP
+    merged: List[List[int]] = []
+    for a, b in _runs(db > params.core_db, first):
+        if merged and a - merged[-1][1] <= params.merge_gap_s * fps:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    edge = int(round(params.edge_s * fps))
     segs = []
-    for a, b in runs:
-        dur = (b - a) * HOP / SR
+    for a, b in merged:
         peak = float(db[a:b].max())
-        if dur < MIN_WORD_S or peak < WORD_PEAK_DB:
+        if peak < params.peak_db:
             continue
-        if dur > MAX_WORD_S:  # foreground merged with loud background: keep the core
-            core = np.argmax(db[a:b])
-            a = max(a, a + core - int(0.6 * SR / HOP))
-            b = min(b, a + int(MAX_WORD_S * SR / HOP))
-        segs.append(Segment(a * HOP, b * HOP, peak, float((env[a:b] ** 2).sum())))
+        lo = a
+        while lo > max(first, a - edge) and db[lo - 1] > params.edge_db:
+            lo -= 1
+        hi = b
+        while hi < min(len(db), b + edge) and db[hi] > params.edge_db:
+            hi += 1
+        dur = (hi - lo) / fps
+        if dur < params.min_s:
+            continue
+        if dur > params.max_s:  # foreground merged with loud background: keep the core
+            centre = lo + int(np.argmax(db[lo:hi]))
+            lo = max(lo, centre - int(params.max_s * fps / 2))
+            hi = min(hi, lo + int(params.max_s * fps))
+        segs.append(Segment(lo * HOP, hi * HOP, peak, float((env[lo:hi] ** 2).sum())))
     return segs
 
 
@@ -220,14 +275,25 @@ def reference_level(x: np.ndarray, instr_end: int) -> float:
     return float(np.percentile(env, 95)) if len(env) else float(envelope(x).max())
 
 
-def cut_segment(x: np.ndarray, seg: Segment) -> Tuple[np.ndarray, int]:
+def cut_segment(x: np.ndarray, seg: Segment, rel_db: Optional[np.ndarray] = None,
+                params: SegParams = DEFAULT_SEG) -> Tuple[np.ndarray, int]:
     """Extract one word run with short fades, pad with silence.
 
+    With ``rel_db`` (see relative_db) and ``params.duck_gain_db`` < 0, the quiet frames
+    of the cut (background speech around the word) are attenuated.
     Returns the clip and the (possibly negative) original sample index of clip[0].
     """
     pad = int(PAD_S * SR)
     a, b = max(0, seg.start - pad), min(len(x), seg.end + pad)
     clip = x[a:b].astype(np.float32).copy()
+    if rel_db is not None and params.duck_gain_db < 0 and len(clip):
+        from scipy.ndimage import uniform_filter1d
+
+        idx = np.clip(np.arange(a, b) // HOP, 0, len(rel_db) - 1)
+        frame_gain = np.where(rel_db >= params.duck_below_db, 1.0,
+                              10.0 ** (params.duck_gain_db / 20.0))
+        frame_gain = uniform_filter1d(frame_gain, 3)
+        clip *= frame_gain[idx].astype(np.float32)
     ramp = min(len(clip) // 4, int(0.03 * SR))
     if ramp > 0:
         fade = np.linspace(0.0, 1.0, ramp, dtype=np.float32)
@@ -241,14 +307,66 @@ def cut_segment(x: np.ndarray, seg: Segment) -> Tuple[np.ndarray, int]:
 
 # --------------------------------------------------------------------------- text
 
-_WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?")
+_TOKEN_RE = re.compile(r"\d+|[^\W\d_]+(?:'[^\W\d_]+)?")
+
+# whisper writes some spoken words in their written form; the captcha expects the word
+_ABBREVIATIONS = {
+    "dr": "doctor", "mr": "mister", "mrs": "missus", "st": "street", "mt": "mount",
+    "ave": "avenue", "vs": "versus", "etc": "etcetera", "ok": "okay",
+    "jr": "junior", "sr": "senior", "prof": "professor", "dept": "department",
+}
+_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+         "fourteen fifteen sixteen seventeen eighteen nineteen").split()
+_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def number_to_words(n: int) -> str:
+    """0..9999 -> English words (as a person would type what they hear)."""
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("" if n % 10 == 0 else " " + _ONES[n % 10])
+    if n < 1000:
+        rest = n % 100
+        return _ONES[n // 100] + " hundred" + ("" if rest == 0 else " " + number_to_words(rest))
+    if n < 10000:
+        rest = n % 1000
+        return _ONES[n // 1000] + " thousand" + ("" if rest == 0 else
+                                                 " " + number_to_words(rest))
+    return str(n)
 
 
 def normalise(text: str) -> str:
-    """What captcha.js would send: lower-cased, trimmed, NFC; punctuation stripped."""
-    text = unicodedata.normalize("NFC", (text or "").lower())
-    words = _WORD_RE.findall(text.replace("’", "'"))
+    """Lower-case words only (what captcha.js would send after the user typed them).
+
+    Punctuation is stripped, abbreviations and small numbers are spelled out, NFC applied.
+    """
+    text = unicodedata.normalize("NFC", (text or "").lower().replace("\u2019", "'"))
+    text = re.sub(r"(?<=\d)[,.](?=\d{3}\b)", "", text)  # 1,000 -> 1000
+    words = []
+    for tok in _TOKEN_RE.findall(text):
+        if tok.isdigit():
+            words.append(number_to_words(int(tok)))
+        else:
+            words.append(_ABBREVIATIONS.get(tok, tok))
     return " ".join(words).strip()
+
+
+def collapse_repeats(text: str) -> str:
+    """'theater theater' -> 'theater'; 'a b a b a' -> 'a b'.
+
+    With a short encoder window whisper tends to loop over the same word(s) until
+    max_length; the loop period is the actual transcript.
+    """
+    words = []
+    for w in text.split():
+        if not words or words[-1] != w:
+            words.append(w)
+    n = len(words)
+    for period in range(1, n // 2 + 1):
+        if all(words[i] == words[i % period] for i in range(n)):
+            return " ".join(words[:period])
+    return " ".join(words)
 
 
 # --------------------------------------------------------------------------- recogniser
@@ -270,23 +388,68 @@ class AudioSolver:
     """One faster-whisper model plus the segmentation pipeline (thread-safe)."""
 
     def __init__(self, model_name: str = MODEL_NAME, cpu_threads: int = CPU_THREADS,
-                 compute_type: str = "int8", beam_size: int = 5):
+                 compute_type: str = "int8", beam_size: int = 5,
+                 seg: SegParams = DEFAULT_SEG, window_s: Optional[float] = WINDOW_S):
         from faster_whisper import WhisperModel
+        from faster_whisper.tokenizer import Tokenizer
+        from faster_whisper.transcribe import get_suppressed_tokens
 
         self.model_name = model_name
         self.beam_size = beam_size
+        self.seg = seg
+        self.window_s = window_s
         self.model = WhisperModel(model_name, device="cpu", compute_type=compute_type,
                                   cpu_threads=cpu_threads)
         self._lock = threading.Lock()  # CTranslate2 model calls are serialised here
-        self.english_only = model_name.endswith(".en")
+        multilingual = self.model.model.is_multilingual
+        self.tokenizer = Tokenizer(self.model.hf_tokenizer, multilingual,
+                                   task="transcribe" if multilingual else None,
+                                   language="en" if multilingual else None)
+        self.prompt = list(self.tokenizer.sot_sequence) + [self.tokenizer.no_timestamps]
+        self.suppress = list(get_suppressed_tokens(self.tokenizer, [-1]))
+
+    def _decode_batch(self, clips: Sequence[np.ndarray]) -> List[Candidate]:
+        """Beam-search decode of word clips in one batch with a short encoder window.
+
+        Whisper is trained on 30 s windows, but the encoder accepts shorter inputs; a few
+        seconds of context are enough for one word and make inference ~5-10x cheaper.
+        """
+        import ctranslate2
+
+        if not clips:
+            return []
+        longest = max(len(c) for c in clips)
+        n = max(int((self.window_s or 30.0) * SR), longest)
+        n = int(np.ceil(n / HOP)) * HOP
+        feats = []
+        for c in clips:
+            padded = np.zeros(n, dtype=np.float32)
+            padded[: len(c)] = c
+            feats.append(self.model.feature_extractor(padded)[:, : n // HOP])
+        batch = np.ascontiguousarray(np.stack(feats).astype(np.float32))
+        with self._lock:
+            enc = self.model.model.encode(ctranslate2.StorageView.from_array(batch))
+            results = self.model.model.generate(
+                enc, [self.prompt] * len(clips), beam_size=self.beam_size, max_length=24,
+                return_scores=True, return_no_speech_prob=True, suppress_blank=True,
+                suppress_tokens=self.suppress)
+        out = []
+        for r in results:
+            tokens = [t for t in r.sequences_ids[0] if t < self.tokenizer.eot]
+            text = collapse_repeats(normalise(self.tokenizer.decode(tokens)))
+            avg = r.scores[0] * len(tokens) / (len(tokens) + 1) if tokens else -9.0
+            out.append(Candidate(text, float(avg), float(r.no_speech_prob)))
+        return out
 
     def _decode(self, clip: np.ndarray) -> Candidate:
-        kwargs = dict(beam_size=self.beam_size, without_timestamps=True,
-                      condition_on_previous_text=False, vad_filter=False, temperature=0.0)
-        if not self.english_only:
-            kwargs["language"] = "en"
+        """Decode one clip with the stock 30 s faster-whisper pipeline (reference path)."""
+        if self.window_s:
+            return self._decode_batch([clip])[0]
         with self._lock:
-            segments, _ = self.model.transcribe(clip, **kwargs)
+            segments, _ = self.model.transcribe(
+                clip, beam_size=self.beam_size, without_timestamps=True,
+                condition_on_previous_text=False, vad_filter=False, temperature=0.0,
+                language="en" if self.model.model.is_multilingual else None)
             segments = list(segments)
         if not segments:
             return Candidate("", -9.0, 1.0)
@@ -301,9 +464,15 @@ class AudioSolver:
         if score < MIN_TEMPLATE_SCORE:
             return [], score
         ref = reference_level(x, instr_end)
+        segs = find_word_segments(x, instr_end, ref, self.seg)[:MAX_SEGMENTS]
+        rel = relative_db(x, ref)
+        clips = [cut_segment(x, seg, rel, self.seg)[0] for seg in segs]
+        if self.window_s:
+            cands = self._decode_batch(clips)
+        else:
+            cands = [self._decode(c) for c in clips]
         out = []
-        for seg in find_word_segments(x, instr_end, ref):
-            cand = self._decode(cut_segment(x, seg)[0])
+        for seg, cand in zip(segs, cands):
             cand.segment = seg
             if cand.text:
                 out.append(cand)
@@ -312,9 +481,8 @@ class AudioSolver:
     def fallback(self, x: np.ndarray) -> str:
         """No template match: transcribe the clip, keep loud words after 'by me'."""
         kwargs = dict(beam_size=self.beam_size, word_timestamps=True,
-                      condition_on_previous_text=False)
-        if not self.english_only:
-            kwargs["language"] = "en"
+                      condition_on_previous_text=False,
+                      language="en" if self.model.model.is_multilingual else None)
         with self._lock:
             segments, _ = self.model.transcribe(x, **kwargs)
             words = [w for s in segments for w in (s.words or [])]
