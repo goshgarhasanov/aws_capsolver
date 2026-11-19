@@ -1,0 +1,40 @@
+# systemd unit for aws_capsolver (system service).
+#
+# deploy/install.sh renders this file with the real checkout path and user
+# (deploy/aws-capsolver.rendered.service) and prints the sudo commands to install it.
+# Paths below are the defaults for a checkout in /opt/aws_capsolver owned by "awscs".
+[Unit]
+Description=aws_capsolver - CapSolver-compatible AWS WAF solving service
+Documentation=https://github.com/goshgarhasanov/aws_capsolver
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=awscs
+Group=awscs
+WorkingDirectory=/opt/aws_capsolver
+# defaults; /etc/default/aws-capsolver (or the user-mode env file) may override them
+Environment=AWSCS_HOST=127.0.0.1
+Environment=AWSCS_PORT=8790
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/default/aws-capsolver
+ExecStart=/opt/aws_capsolver/.venv/bin/python -m aws_capsolver serve --host ${AWSCS_HOST} --port ${AWSCS_PORT}
+Restart=on-failure
+RestartSec=5
+# running tasks are abandoned on stop; give uvicorn time to close connections
+TimeoutStopSec=30
+KillMode=mixed
+LimitNOFILE=65536
+# hardening (removed by install.sh for a --user unit)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

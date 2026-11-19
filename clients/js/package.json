@@ -1,0 +1,10 @@
+{
+  "name": "aws-capsolver-client",
+  "version": "0.1.0",
+  "description": "fetch-based client for the aws_capsolver API",
+  "type": "module",
+  "main": "awsCapsolverClient.js",
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}

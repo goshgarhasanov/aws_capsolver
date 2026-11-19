@@ -1,0 +1,31 @@
+# docker compose up -d --build
+# Keys: create config/keys.json next to this file (see README) or set AWSCS_KEYS in .env.
+services:
+  aws-capsolver:
+    build: .
+    image: aws-capsolver:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8790:8790"     # expose publicly only behind a reverse proxy / firewall
+    environment:
+      AWSCS_KEYS: ${AWSCS_KEYS:-}
+      AWSCS_WORKERS: ${AWSCS_WORKERS:-8}
+      AWSCS_WARMUP: ${AWSCS_WARMUP:-1}
+      AWSCS_LOG_LEVEL: ${AWSCS_LOG_LEVEL:-INFO}
+      # set to 1 once the backbones are in the models volume
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+    volumes:
+      - models:/models                       # HF / open_clip / whisper caches
+      - state:/state                         # usage.db
+      - ./config:/config:ro                  # config/keys.json (reloaded on change)
+      # - ./weights:/app/weights:ro          # newer trained head without rebuilding
+    # stop_grace_period lets running tasks finish their current network call
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 6g
+
+volumes:
+  models:
+  state:

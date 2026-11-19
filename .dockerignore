@@ -1,0 +1,21 @@
+# keep the build context small: code, requirements and the shipped head only
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+data
+logs
+*.log
+*.db
+*.sqlite
+keys.json
+.env
+tests
+tools
+clients
+deploy
+docker-compose.yml
+Dockerfile
