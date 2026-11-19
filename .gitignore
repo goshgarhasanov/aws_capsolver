@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+logs/
+# collected samples and grids stay local; only the final weights are versioned
+data/
+weights/*
+!weights/aws_capsolver_head.pt
+!weights/.gitkeep
+*.sqlite
+*.db
+keys.json
+.env
