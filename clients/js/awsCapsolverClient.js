@@ -81,20 +81,25 @@ export class AwsCapsolverClient {
     } catch (err) {
       throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: ${err.message || err}`);
     }
-    const text = await resp.text();
-    if (resp.status !== 200) {
-      throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: HTTP ${resp.status} ${text.slice(0, 200)}`);
+    let text;
+    try {
+      text = await resp.text();
+    } catch (err) {
+      throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: ${err.message || err}`);
     }
-    let data;
+    let data = null;
     try {
       data = JSON.parse(text);
     } catch {
-      throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: reply is not JSON`);
+      data = null;
     }
-    if (data === null || typeof data !== "object" || Array.isArray(data)) {
-      throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: reply is not an object`);
+    const isObject = data !== null && typeof data === "object" && !Array.isArray(data);
+    if (!isObject || (resp.status !== 200 && !data.errorId)) {
+      // a proxy error page or similar; the service itself always answers a JSON object
+      throw new CapsolverError(ERROR_CLIENT_TRANSPORT, `${path}: HTTP ${resp.status} ${text.slice(0, 200)}`);
     }
     if (data.errorId) {
+      // also for HTTP 500 replies that carry an errorCode
       throw new CapsolverError(data.errorCode || "ERROR_UNKNOWN", data.errorDescription || "", data.taskId ?? null);
     }
     return data;

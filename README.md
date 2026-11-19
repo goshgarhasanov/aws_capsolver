@@ -75,14 +75,16 @@ See [Deployment](#deployment) for details.
 
 ## API reference
 
-All endpoints take and return JSON. Every reply uses HTTP 200 (like CapSolver); failures
-carry `errorId: 1`:
+All endpoints take and return JSON. Replies use HTTP 200 (like CapSolver), including
+errors, which carry `errorId: 1`. The only exception is an unexpected server bug: HTTP 500
+with `ERROR_SERVICE_UNAVAILABLE` / `internal error`.
 
 ```json
 {"errorId": 1, "errorCode": "ERROR_...", "errorDescription": "..."}
 ```
 
-Every POST body must contain `clientKey`.
+Every POST body must be a JSON object with `clientKey`, at most `AWSCS_MAX_BODY_BYTES`
+(4 MB) long. There is no OpenAPI / docs page.
 
 ### POST /createTask - AntiAwsWafTask / AntiAwsWafTaskProxyLess (asynchronous)
 
@@ -165,7 +167,8 @@ curl -s localhost:8790/createTask -d '{"clientKey":"MY-KEY","task":{
 {"errorId": 0, "taskId": "...", "status": "ready", "solution": {"objects": [1, 4, 5, 7, 8]}}
 ```
 
-`objects` are 0-based tile indices. Limits: at most 16 images of 2 MB each.
+`objects` are 0-based tile indices. Limits: at most 16 images of 2 MB each, and the whole
+body within `AWSCS_MAX_BODY_BYTES`.
 
 Toycar problem (`question` = `aws:toycarcity:carcity`, `images` = one image):
 ```json
@@ -192,7 +195,8 @@ The service takes no payments; `balance` is the static value from `keys.json`
 ```json
 {"ok": true, "version": "0.1.0", "vision": true, "time": 1795127465}
 ```
-`vision` is `false` when the vision package cannot be imported; WAF tasks then still solve
+`ok` turns `false` while the service is shutting down. `vision` is `false` when the vision
+package cannot be imported; WAF tasks then still solve
 PoW-only pages but every CAPTCHA fails with `ERROR_CAPTCHA_UNSOLVABLE`. Used by the Docker
 healthcheck.
 
@@ -200,8 +204,8 @@ healthcheck.
 
 | errorCode | returned by | when |
 |---|---|---|
-| `ERROR_KEY_DENIED_ACCESS` | every POST | `clientKey` missing or not in `keys.json` / `AWSCS_KEYS` |
-| `ERROR_INVALID_TASK_DATA` | createTask | body is not a JSON object; missing `websiteURL`; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
+| `ERROR_KEY_DENIED_ACCESS` | every POST | `clientKey` missing (`clientKey is required`) or not in `keys.json` / `AWSCS_KEYS` (`invalid clientKey`) |
+| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
 | `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, or a classification question family other than `grid` / `toycarcity` |
 | `ERROR_TASKID_INVALID` | getTaskResult | unknown, expired, or another key's `taskId` |
 | `ERROR_CAPTCHA_UNSOLVABLE` | task result / classification | every CAPTCHA round failed, unsupported problem type, vision unavailable, or an internal solver error |
@@ -210,7 +214,7 @@ healthcheck.
 | `ERROR_SITE_UNREACHABLE` | task result | DNS failure, connection or TLS error (without a proxy), too many redirects, oversized or unexpected reply from the site or the WAF endpoints |
 | `ERROR_TASK_TIMEOUT` | task result / classification | the task exceeded `AWSCS_TASK_TIMEOUT`, a network call timed out, or classification exceeded `AWSCS_CLASSIFY_TIMEOUT` |
 | `ERROR_NO_SLOT_AVAILABLE` | createTask | `AWSCS_MAX_PENDING` tasks are already queued or running; retry later |
-| `ERROR_SERVICE_UNAVAILABLE` | createTask | the service is shutting down |
+| `ERROR_SERVICE_UNAVAILABLE` | createTask / any | the service is shutting down; with HTTP 500, an unexpected internal error |
 
 Example of each shape:
 
@@ -229,7 +233,7 @@ Example of each shape:
 ```
 
 The bundled clients add two client-side codes: `ERROR_CLIENT_TRANSPORT` (connection
-failure, non-200 HTTP status, non-JSON reply) and `ERROR_CLIENT_TIMEOUT` (polling gave up).
+failure, request timeout, or a reply that is not the service's JSON) and `ERROR_CLIENT_TIMEOUT` (polling gave up).
 
 ## Configuration
 
@@ -252,6 +256,7 @@ when it changes):
 | `AWSCS_CAPTCHA_ROUNDS` | `5` | puzzles to attempt before giving up |
 | `AWSCS_VERIFY_TOKEN` | `1` | re-fetch the page with the PoW token to detect a CAPTCHA action |
 | `AWSCS_WARMUP` | `1` | preload the vision model at startup |
+| `AWSCS_MAX_BODY_BYTES` | `4194304` | request body limit |
 | `AWSCS_ALLOW_PRIVATE` | `0` | allow `websiteURL` / WAF hosts that resolve to private addresses (SSRF guard off) |
 | `AWSCS_LOG_LEVEL` | `INFO` | log level (same as `--log-level`) |
 
@@ -311,6 +316,9 @@ Resources: plan for about 3 GB RAM per instance (2.8 GB RSS was measured with th
 backbones loaded after the load test below); the audio model adds to that when used.
 Classification is CPU-bound and effectively serialised per process (see [Load test](#load-test)),
 so throughput scales with faster CPUs or more instances, not with `AWSCS_WORKERS`.
+Run one server process per instance: the task registry is in memory, so with several
+instances behind a load balancer `getTaskResult` must reach the instance that created the
+task (sticky routing per client, or one instance per client group).
 
 ### Docker / Compose
 

@@ -89,16 +89,15 @@ class AwsCapsolverClient:
                                      timeout=self.request_timeout)
         except requests.RequestException as exc:
             raise CapsolverError(ERROR_CLIENT_TRANSPORT, f"{path}: {exc}") from exc
-        if resp.status_code != 200:
-            raise CapsolverError(ERROR_CLIENT_TRANSPORT,
-                                 f"{path}: HTTP {resp.status_code} {resp.text[:200]}")
         try:
             data = resp.json()
-        except ValueError as exc:
-            raise CapsolverError(ERROR_CLIENT_TRANSPORT, f"{path}: reply is not JSON") from exc
-        if not isinstance(data, dict):
-            raise CapsolverError(ERROR_CLIENT_TRANSPORT, f"{path}: reply is not an object")
-        if data.get("errorId"):
+        except ValueError:
+            data = None
+        if not isinstance(data, dict) or (resp.status_code != 200 and not data.get("errorId")):
+            # a proxy error page or similar; the service itself always answers a JSON object
+            raise CapsolverError(ERROR_CLIENT_TRANSPORT,
+                                 f"{path}: HTTP {resp.status_code} {resp.text[:200]}")
+        if data.get("errorId"):  # also for HTTP 500 replies that carry an errorCode
             raise CapsolverError(str(data.get("errorCode") or "ERROR_UNKNOWN"),
                                  str(data.get("errorDescription") or ""), data.get("taskId"))
         return data
