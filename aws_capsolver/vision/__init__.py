@@ -13,11 +13,25 @@ from __future__ import annotations
 from .errors import InvalidInput, UnsupportedProblem, VisionError
 
 
-def classify_grid(images: list[bytes], target: str, threshold: float | None = None) -> list[int]:
-    """Return the 0-based, row-major indices of the tiles that contain ``target``."""
+def classify_grid(images: list[bytes], target: str, threshold: float | None = None, *,
+                  count: int | None = None) -> list[int]:
+    """Return the 0-based, row-major indices of the tiles that contain ``target``.
+
+    By default the 5 most likely tiles are returned (``gridcaptcha-5-*`` grids always have
+    5 target tiles); pass ``count`` (e.g. from ``count_from_problem_type``) or an explicit
+    ``threshold`` to change that.
+    """
     from .grid import classify_grid as _impl
 
-    return _impl(images, target, threshold)
+    return _impl(images, target, threshold, count=count)
+
+
+def count_from_problem_type(problem_type: str | None) -> int | None:
+    """'gridcaptcha-5-0.1-0' -> 5 (number of tiles to select); None if unknown."""
+    if not problem_type or not problem_type.startswith("gridcaptcha-"):
+        return None
+    part = problem_type.split("-")[1]
+    return int(part) if part.isdigit() else None
 
 
 def solve_toycar(image: bytes) -> tuple[int, int]:
@@ -36,5 +50,5 @@ def transcribe(audio_b64: str) -> str:
     return _impl(audio_b64)
 
 
-__all__ = ["classify_grid", "solve_toycar", "transcribe", "UnsupportedProblem",
+__all__ = ["classify_grid", "count_from_problem_type", "solve_toycar", "transcribe", "UnsupportedProblem",
            "VisionError", "InvalidInput"]

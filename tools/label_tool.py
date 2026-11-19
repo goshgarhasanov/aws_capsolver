@@ -65,6 +65,52 @@ def cmd_predict(args) -> None:
     print(f"predicted {len(gids)} grids")
 
 
+def _zero_shot_classes(eng, feats: list[np.ndarray]) -> list[list[str]]:
+    """Per-backbone argmax class (distractors collapse to 'other') for 9 tiles."""
+    from aws_capsolver.vision.grid import KNOWN_TARGETS, DISTRACTORS
+    names = list(KNOWN_TARGETS) + list(DISTRACTORS)
+    out = []
+    for bb, f in zip(eng.backbones, feats):
+        T = np.stack([eng._text(bb, c) for c in names])
+        idx = (f @ T.T).argmax(1)
+        out.append([names[j] if names[j] in KNOWN_TARGETS else "other" for j in idx])
+    return out
+
+
+def cmd_consensus(args) -> None:
+    """Label train grids where every backbone agrees on every tile and the target count is 5.
+
+    Grids that fail the check get their majority vote written to pseudo.json for review.
+    Val/test grids are never auto-labelled; they always go to manual review.
+    """
+    from collections import Counter
+    from aws_capsolver.vision.grid import GridEngine
+    eng = GridEngine(specs=args.models.split(","), head_path="none", tta=False)
+    manual = vd.tile_labels()
+    gids = [g for g in vd.list_grids() if g not in manual]
+    per_bb = [vd.embeddings(eng, gids, k) for k in range(len(eng.specs))]
+    auto = vd.auto_labels()
+    pseudo = vd.load_json(PSEUDO, {})
+    stats = Counter()
+    for g in gids:
+        votes = _zero_shot_classes(eng, [pb[g] for pb in per_bb])
+        maj = [Counter(v[i] for v in votes).most_common(1)[0] for i in range(9)]
+        agree = all(n == len(votes) for _, n in maj)
+        labels = [c for c, _ in maj]
+        ok = agree and "other" not in labels and labels.count(vd.target(g)) == 5
+        if ok and vd.split_of(g) == "train":
+            auto[g] = labels
+            pseudo.pop(g, None)
+            stats["auto"] += 1
+        else:
+            auto.pop(g, None)
+            pseudo[g] = [[c, n / len(votes)] for c, n in maj]
+            stats["review_" + vd.split_of(g) + ("" if ok else "_disagree")] += 1
+    vd.save_json(vd.AUTO_LABELS, auto)
+    vd.save_json(PSEUDO, pseudo)
+    print(dict(stats))
+
+
 def cmd_sheets(args) -> None:
     from PIL import Image, ImageDraw
     pseudo = vd.load_json(PSEUDO, {})
@@ -75,6 +121,10 @@ def cmd_sheets(args) -> None:
             continue
         if args.gids and g not in args.gids:
             continue
+        if args.split and vd.split_of(g) not in args.split:
+            continue
+        if args.limit and len({it[2] for it in items} | {g}) > args.limit:
+            break
         for i, (c, conf) in enumerate(res):
             items.append((c, conf, g, i))
     items.sort(key=lambda t: (t[0], t[1]))
@@ -142,9 +192,13 @@ def main() -> None:
     s.add_argument("--cols", type=int, default=12); s.add_argument("--rows", type=int, default=8)
     s.add_argument("--size", type=int, default=72); s.add_argument("--relabel", action="store_true")
     s.add_argument("--gids", nargs="*")
+    s.add_argument("--split", nargs="*", choices=["train", "val", "test"])
+    s.add_argument("--limit", type=int, help="max number of grids on this batch of sheets")
+    c = sub.add_parser("consensus"); c.add_argument("--models", required=True)
     a = sub.add_parser("accept"); a.add_argument("sheet", type=int); a.add_argument("fixes", nargs="*")
     args = ap.parse_args()
-    {"predict": cmd_predict, "sheets": cmd_sheets, "accept": cmd_accept}[args.cmd](args)
+    {"predict": cmd_predict, "sheets": cmd_sheets, "accept": cmd_accept,
+     "consensus": cmd_consensus}[args.cmd](args)
 
 
 if __name__ == "__main__":

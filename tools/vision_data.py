@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT))
 GRIDS = ROOT / "data" / "grids"
 TILE_LABELS = GRIDS / "tile_labels.json"   # {grid_id: [class name per tile]}
 LABELS = GRIDS / "labels.json"             # {grid_id: [selected tile indices]}  (derived)
-SPLIT = GRIDS / "split.json"               # {"test": [grid ids]} frozen held-out split
+AUTO_LABELS = GRIDS / "auto_labels.json"   # {grid_id: [class per tile]} model consensus
+SPLIT = GRIDS / "split.json"               # record of the val/test grid ids (hash rule)
 CACHE = ROOT / "data" / "emb_cache"
 
 
@@ -46,7 +47,18 @@ def save_json(path: Path, obj) -> None:
 
 
 def tile_labels() -> dict[str, list[str]]:
+    """Manually reviewed tile classes (the only labels used for val/test scoring)."""
     return load_json(TILE_LABELS, {})
+
+
+def auto_labels() -> dict[str, list[str]]:
+    """Consensus labels from several zero-shot backbones (training only)."""
+    return load_json(AUTO_LABELS, {})
+
+
+def train_labels() -> dict[str, list[str]]:
+    """Manual labels take precedence over consensus labels."""
+    return {**auto_labels(), **tile_labels()}
 
 
 def grid_answer(gid: str, classes: list[str]) -> list[int]:
@@ -59,23 +71,36 @@ def write_derived_labels() -> None:
     save_json(LABELS, {g: grid_answer(g, c) for g, c in tl.items()})
 
 
-def frozen_split(test_frac: float = 0.3) -> tuple[list[str], list[str]]:
-    """Deterministic split by hash of the grid id, frozen in split.json once written.
+def split_of(gid: str) -> str:
+    """Deterministic split by hash of the grid id: 30% test, 15% val, 55% train.
 
-    New grids added later are assigned by the same hash rule, so earlier test grids never
-    move into training.
+    The rule never changes, so a grid can never move between splits as data is added.
     """
-    labelled = sorted(tile_labels())
-    test = []
-    for g in labelled:
-        h = int(hashlib.sha1(("split:" + g).encode()).hexdigest(), 16) % 1000
-        if h < test_frac * 1000:
-            test.append(g)
-    frozen = load_json(SPLIT, {"test": []})
-    test_set = set(frozen["test"]) | set(test)
-    save_json(SPLIT, {"test": sorted(test_set)})
-    train = [g for g in labelled if g not in test_set]
-    return train, [g for g in labelled if g in test_set]
+    h = int(hashlib.sha1(("split:" + gid).encode()).hexdigest(), 16) % 100
+    return "test" if h < 30 else "val" if h < 45 else "train"
+
+
+def splits(require_manual_eval: bool = True) -> dict[str, list[str]]:
+    """{train, val, test} grid ids that have labels.
+
+    train uses manual + consensus labels; val/test only manually reviewed grids (when
+    ``require_manual_eval``), so the reported accuracy never depends on model-made labels.
+    """
+    manual = tile_labels()
+    anyl = train_labels()
+    out: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+    for g in sorted(anyl):
+        s = split_of(g)
+        if s == "train" or not require_manual_eval or g in manual:
+            out[s].append(g)
+    save_json(SPLIT, {k: v for k, v in out.items() if k != "train"})
+    return out
+
+
+def frozen_split() -> tuple[list[str], list[str]]:
+    """Backward compatible (train, test) pair."""
+    sp = splits()
+    return sp["train"], sp["test"]
 
 
 def cache_path(spec: str, tta: bool) -> Path:
@@ -90,11 +115,11 @@ def embeddings(engine, gids: list[str], spec_index: int = 0) -> dict[str, np.nda
     cache = dict(np.load(path)) if path.is_file() else {}
     missing = [g for g in gids if g not in cache]
     if missing:
-        from aws_capsolver.vision.grid import _decode
+        from aws_capsolver.vision.grid import decode_tiles
         bb = engine.backbones[spec_index]
         for k in range(0, len(missing), 8):
             chunk = missing[k:k + 8]
-            imgs = [im for g in chunk for im in _decode(tiles(g))]
+            imgs = [im for g in chunk for im in decode_tiles(tiles(g))]
             f = engine._embed_one(bb, imgs)
             for j, g in enumerate(chunk):
                 cache[g] = f[9 * j:9 * j + 9]

@@ -33,10 +33,10 @@ COMPARE = [
 ]
 
 
-def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool) -> dict:
+def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, count: int | None = 5) -> dict:
     from aws_capsolver.vision.grid import select_tiles, normalize_target
 
-    tl = vd.tile_labels()
+    tl = vd.train_labels()
     per_bb = [vd.embeddings(engine, gids, k) for k in range(len(engine.specs))]
     tiles_ok = grids_ok = 0
     errors = []
@@ -47,8 +47,11 @@ def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool) -
         method = "head"
         if s is None:
             s, method = engine.zero_shot_probs(feats, t), "zeroshot"
-        thr = threshold if threshold is not None else (engine.default_threshold(t) if use_head else 0.5)
-        pred = set(select_tiles(s, thr))
+        if threshold is None and count:
+            pred = set(select_tiles(s, count=count))
+        else:
+            thr = threshold if threshold is not None else (engine.default_threshold(t) if use_head else 0.5)
+            pred = set(select_tiles(s, thr))
         truth = set(vd.grid_answer(g, tl[g]))
         tiles_ok += sum((i in pred) == (i in truth) for i in range(9))
         if pred == truth:
@@ -78,26 +81,28 @@ def main() -> None:
     ap.add_argument("--models", help="comma separated model:pretrained (default: engine default)")
     ap.add_argument("--compare", action="store_true", help="zero-shot sweep over candidate backbones")
     ap.add_argument("--no-head", action="store_true")
-    ap.add_argument("--no-tta", action="store_true")
-    ap.add_argument("--threshold", type=float)
-    ap.add_argument("--split", choices=["test", "train", "all"], default="test")
+    ap.add_argument("--tta", action="store_true", help="embed tile + mirror image")
+    ap.add_argument("--threshold", type=float, help="threshold mode instead of top-K")
+    ap.add_argument("--count", type=int, default=5, help="select top-K tiles (0: threshold mode)")
+    ap.add_argument("--split", choices=["test", "val", "train", "eval"], default="test",
+                    help="eval = val + test (manually labelled grids only)")
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--show-errors", type=int, default=10)
     args = ap.parse_args()
 
     from aws_capsolver.vision.grid import GridEngine
 
-    train, test = vd.frozen_split()
-    gids = {"test": test, "train": train, "all": train + test}[args.split]
+    sp = vd.splits()
+    gids = sp["val"] + sp["test"] if args.split == "eval" else sp[args.split]
     runs = [[m] for m in COMPARE] if args.compare else [args.models.split(",") if args.models else None]
     rows = []
     for specs in runs:
         eng = GridEngine(specs=specs, head_path="none" if args.no_head else None,
-                         tta=not args.no_tta, threads=args.threads or None)
-        res = evaluate(eng, gids, args.threshold, use_head=not args.no_head)
+                         tta=args.tta, threads=args.threads or None)
+        res = evaluate(eng, gids, args.threshold, use_head=not args.no_head, count=args.count)
         lat = latency(eng)
         row = {"models": eng.specs, "head": bool(eng.head) and not args.no_head, "tta": eng.tta,
-               "split": args.split, "grids": res["grids"], "tile_acc": round(res["tile_acc"], 4),
+               "split": args.split, "mode": f"top{args.count}" if args.count and args.threshold is None else "threshold", "grids": res["grids"], "tile_acc": round(res["tile_acc"], 4),
                "grid_acc": round(res["grid_acc"], 4), "latency_s": round(lat, 3)}
         rows.append(row)
         print(json.dumps(row), flush=True)
