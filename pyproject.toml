@@ -1,0 +1,17 @@
+[project]
+name = "aws_capsolver"
+version = "0.1.0"
+description = "Self-hosted, CapSolver-compatible solving service for AWS WAF challenges and CAPTCHAs"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.29", "requests>=2.31", "Pillow>=10.0"]
+
+[project.scripts]
+aws-capsolver = "aws_capsolver.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["aws_capsolver*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:seleniumbase"
+filterwarnings = ["ignore::DeprecationWarning"]

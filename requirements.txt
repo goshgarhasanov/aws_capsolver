@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+Pillow>=10.0
+# tests / tools
+httpx>=0.27
+pytest>=8.0
+playwright>=1.44  # tools/e2e_waf.py only
