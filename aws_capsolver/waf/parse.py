@@ -59,8 +59,12 @@ def _parse_goku(html: str) -> Dict[str, str]:
         block = match.group(1)
         try:
             obj = json.loads(block)
-            props = {k: str(v) for k, v in obj.items() if k in ("key", "iv", "context") and v}
         except ValueError:
+            obj = None
+        if isinstance(obj, dict):
+            props = {k: v for k, v in obj.items()
+                     if k in ("key", "iv", "context") and isinstance(v, str) and v}
+        else:
             # not strict JSON (single quotes, unquoted keys) - read field by field
             for name, frx in _FIELD_RE.items():
                 found = frx.search(block)
@@ -78,9 +82,10 @@ def extract_waf_params(html: str) -> WafParams:
         return params
     goku = _parse_goku(html)
     params.key, params.iv, params.context = goku.get("key"), goku.get("iv"), goku.get("context")
+    scan = html.replace("\\/", "/")  # URLs inside JSON strings are often written https:\/\/
     for attr, rx in (("challenge_js", _CHALLENGE_JS_RE), ("captcha_js", _CAPTCHA_JS_RE),
                      ("jsapi_js", _JSAPI_RE)):
-        found = rx.search(html)
+        found = rx.search(scan)
         if found:
             setattr(params, attr, found.group(0))
     if params.jsapi_js:

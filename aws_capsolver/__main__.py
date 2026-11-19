@@ -9,8 +9,10 @@ import time
 
 
 def _logging(level: str) -> None:
+    from .waf.http import install_log_redaction
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    install_log_redaction()  # proxy passwords never reach the log output
 
 
 def main(argv=None) -> int:
@@ -34,22 +36,33 @@ def main(argv=None) -> int:
         from .server import create_app
         settings = Settings.from_env()
         settings.open_access = settings.open_access or args.open
+        # one process only: the task registry lives in memory (scale with AWSCS_WORKERS)
         uvicorn.run(create_app(settings), host=args.host, port=args.port,
-                    log_level=args.log_level.lower())
+                    log_level=args.log_level.lower(), log_config=None)
         return 0
 
+    from .config import Settings
+    from .waf import pow as powlib
     from .waf.errors import SolverError
     from .waf.http import parse_proxy
     from .waf.solver import SolveRequest, SolverSettings, solve_website
+    settings = Settings.from_env()
     started = time.monotonic()
     try:
         outcome = solve_website(
             SolveRequest(website_url=args.url, proxy_url=parse_proxy(args.proxy),
                          user_agent=args.user_agent),
-            SolverSettings(), deadline=started + 180)
+            SolverSettings(http_timeout=settings.http_timeout,
+                           pow_processes=settings.pow_processes,
+                           captcha_rounds=settings.captcha_rounds,
+                           verify_token=settings.verify_token,
+                           allow_private=settings.allow_private),
+            deadline=started + max(settings.task_timeout, 30))
     except SolverError as exc:
         print(json.dumps({"errorCode": exc.code, "errorDescription": exc.description}))
         return 1
+    finally:
+        powlib.shutdown_pool()
     print(json.dumps({"cookie": outcome.token, "userAgent": outcome.user_agent,
                       "captcha": outcome.used_captcha, "rounds": outcome.captcha_rounds,
                       "seconds": round(time.monotonic() - started, 2)}))

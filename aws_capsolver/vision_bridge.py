@@ -8,7 +8,7 @@ the protocol layer and the API keep working and report ERROR_CAPTCHA_UNSOLVABLE.
 import importlib
 import logging
 import threading
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -27,7 +27,7 @@ def _load():
                 _module = importlib.import_module("aws_capsolver.vision")
                 for name in ("classify_grid", "solve_toycar", "transcribe", "UnsupportedProblem"):
                     getattr(_module, name)
-            except (ImportError, AttributeError) as exc:
+            except Exception as exc:  # ImportError, AttributeError, broken native deps
                 logger.warning("vision package unavailable (%s); captcha solving disabled", exc)
                 _module = False
         return _module or None
@@ -53,11 +53,19 @@ def available() -> bool:
     return _load() is not None
 
 
-def classify_grid(images: List[bytes], target: str) -> List[int]:
+def classify_grid(images: List[bytes], target: str, count: Optional[int] = None) -> List[int]:
+    """Tile indices showing `target`; `count` is the number of tiles the problem expects."""
     mod = _load()
     if not mod:
         raise FallbackUnsupported("vision package is not installed")
-    return list(mod.classify_grid(images, target))
+    if count is None:
+        return list(mod.classify_grid(images, target))
+    try:
+        return list(mod.classify_grid(images, target, count=count))
+    except TypeError as exc:  # an older vision build without the `count` keyword
+        if "count" not in str(exc):
+            raise
+        return list(mod.classify_grid(images, target))
 
 
 def solve_toycar(image: bytes) -> Tuple[int, int]:

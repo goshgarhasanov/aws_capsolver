@@ -17,8 +17,10 @@ client_solution per problem family (from captcha.js):
 """
 
 import base64
+import binascii
 import json
 import logging
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -28,7 +30,8 @@ from urllib.parse import quote
 import requests
 
 from .. import vision_bridge
-from .errors import (ERROR_CAPTCHA_UNSOLVABLE, ERROR_TASK_TIMEOUT, SolverError)
+from .challenge import check_stop
+from .errors import ERROR_CAPTCHA_UNSOLVABLE, SolverError
 from .http import request_json
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,23 @@ def problem_family(problem: Dict[str, Any]) -> str:
     return str(problem.get("problem_type") or "").split("-")[0]
 
 
+def grid_tile_count(problem: Dict[str, Any]) -> Optional[int]:
+    """'gridcaptcha-5-0.1-0' -> 5 (tiles to select); None when the type does not say."""
+    parts = str(problem.get("problem_type") or "").split("-")
+    if len(parts) > 1 and parts[0] == "gridcaptcha" and parts[1].isdigit():
+        return int(parts[1]) or None
+    return None
+
+
+def _b64(value: Any, what: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"{what} is not a base64 string")
+    try:
+        return base64.b64decode(value)
+    except (binascii.Error, ValueError) as exc:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"{what} is not valid base64") from exc
+
+
 def toycar_solution(x: int, y: int) -> Dict[str, int]:
     """Map a point in natural image pixels onto captcha.js' toycarcity solution cell."""
     return {"x": int((2 * x - 16) // 32), "y": int((2 * y) // 32)}
@@ -68,29 +88,35 @@ def normalise_audio_answer(text: str) -> str:
 def solve_problem(problem: Dict[str, Any]) -> Any:
     """Compute client_solution for one problem via the vision package."""
     family = problem_family(problem)
-    assets = problem.get("assets") or {}
+    assets = problem.get("assets")
+    if not isinstance(assets, dict):
+        assets = {}
     try:
         if family == "gridcaptcha":
-            images = [base64.b64decode(i) for i in as_list(assets.get("images"))]
+            images = [_b64(v, "grid image") for v in as_list(assets.get("images"))]
             targets = as_list(assets.get("target"))
             if not images or not targets:
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "grid problem without images/target")
-            cells = sorted({int(i) for i in vision_bridge.classify_grid(images, str(targets[0]))})
-            if any(i < 0 or i >= len(images) for i in cells):
+            cells = sorted({int(i) for i in vision_bridge.classify_grid(
+                images, str(targets[0]), count=grid_tile_count(problem))})
+            if not cells or any(i < 0 or i >= len(images) for i in cells):
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"vision returned bad tiles {cells}")
             return cells
         if family == "toycarcity":
-            image = assets.get("image")
-            if not image:
-                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "toycarcity problem without image")
-            return toycar_solution(*vision_bridge.solve_toycar(base64.b64decode(image)))
+            image = _b64(assets.get("image"), "toycarcity image")
+            return toycar_solution(*vision_bridge.solve_toycar(image))
         if family == "noisyneighbour":
             audio = assets.get("audio")
-            if not audio:
+            if not isinstance(audio, str) or not audio:
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "audio problem without audio")
             return normalise_audio_answer(vision_bridge.transcribe(audio))
-    except vision_bridge.unsupported_types() as exc:
+    except SolverError:
+        raise
+    except vision_bridge.unsupported_types() + vision_bridge.invalid_input_types() as exc:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"{family}: {exc}") from exc
+    except (TypeError, ValueError) as exc:  # malformed vision output (e.g. non-int tiles)
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE,
+                          f"{family}: bad solver output ({exc.__class__.__name__})") from exc
     raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"unsupported problem type {family!r}")
 
 
@@ -104,19 +130,21 @@ class CaptchaContext:
     locale: str = "en-us"
 
 
-def _with_region(url: str, region: Optional[str]) -> str:
-    return f"{url}?region={quote(region, safe='')}" if region else url
+def _with_region(url: str, region: Any) -> str:
+    if isinstance(region, str) and region:
+        return f"{url}?region={quote(region, safe='')}"
+    return url
 
 
 def fetch_problem(session: requests.Session, ctx: CaptchaContext, kind: str,
-                  timeout: float) -> Dict[str, Any]:
+                  timeout: float, deadline: Optional[float] = None) -> Dict[str, Any]:
     params = {"kind": kind, "domain": ctx.domain, "locale": ctx.locale}
     if ctx.api_key:
         params["api_key"] = ctx.api_key
     headers = {"accept": "*/*", "origin": f"https://{ctx.domain}",
                "referer": f"https://{ctx.domain}/"}
     problem = request_json(session, "GET", f"{ctx.captcha_base}/problem", "captcha /problem",
-                           timeout, params=params, headers=headers)
+                           timeout, deadline, params=params, headers=headers)
     if not problem.get("problem_type") or not problem.get("state"):
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"unexpected /problem response "
                           f"(keys={sorted(problem)})")
@@ -124,7 +152,8 @@ def fetch_problem(session: requests.Session, ctx: CaptchaContext, kind: str,
 
 
 def submit_solution(session: requests.Session, ctx: CaptchaContext, problem: Dict[str, Any],
-                    solution: Any, solve_millis: int, timeout: float) -> Dict[str, Any]:
+                    solution: Any, solve_millis: int, timeout: float,
+                    deadline: Optional[float] = None) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "state": problem.get("state"),
         "key": problem.get("key"),
@@ -140,22 +169,23 @@ def submit_solution(session: requests.Session, ctx: CaptchaContext, problem: Dic
                "origin": f"https://{ctx.domain}", "referer": f"https://{ctx.domain}/"}
     return request_json(session, "POST",
                         _with_region(f"{ctx.captcha_base}/verify", problem.get("region")),
-                        "captcha /verify", timeout, data=json.dumps(body), headers=headers)
+                        "captcha /verify", timeout, deadline, data=json.dumps(body),
+                        headers=headers)
 
 
 def exchange_voucher(session: requests.Session, ctx: CaptchaContext, voucher: str,
                      region: Optional[str], existing_token: Optional[str],
-                     timeout: float) -> str:
+                     timeout: float, deadline: Optional[float] = None) -> str:
     if not ctx.token_base:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "no token endpoint to redeem the voucher")
     headers = {"accept": "*/*", "origin": f"https://{ctx.domain}",
                "referer": f"https://{ctx.domain}/"}
     result = request_json(session, "POST", _with_region(f"{ctx.token_base}/voucher", region),
-                          "token /voucher", timeout,
+                          "token /voucher", timeout, deadline,
                           json={"captcha_voucher": voucher, "existing_token": existing_token},
                           headers=headers)
     token = result.get("token")
-    if not token:
+    if not isinstance(token, str) or not token:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"/voucher returned no token "
                           f"(keys={sorted(result)})")
     return token
@@ -171,19 +201,31 @@ class CaptchaResult:
 def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
                   existing_token: Optional[str] = None, kinds: tuple = ("visual", "audio"),
                   max_rounds: int = 5, timeout: float = 20.0,
-                  deadline: Optional[float] = None, redeem: bool = True) -> CaptchaResult:
-    """Solve problems until a voucher is issued, then redeem it for an aws-waf-token."""
+                  deadline: Optional[float] = None, redeem: bool = True,
+                  cancel: Optional[threading.Event] = None) -> CaptchaResult:
+    """
+    Solve problems until a voucher is issued, then redeem it for an aws-waf-token.
+
+    A wrong answer comes back with a replacement problem which is solved next; a correct
+    answer that is not yet enough comes back with the next problem. When a problem
+    family cannot be solved (or the problem cannot be fetched) the next `kinds` entry is
+    tried. `max_rounds` bounds the total number of answers submitted.
+    """
     last_error: Optional[SolverError] = None
     rounds = 0
     for kind in kinds:
+        if rounds >= max_rounds:
+            break
+        check_stop(deadline, cancel, "captcha")
         try:
-            problem: Optional[Dict[str, Any]] = fetch_problem(session, ctx, kind, timeout)
+            problem: Optional[Dict[str, Any]] = fetch_problem(session, ctx, kind, timeout,
+                                                              deadline)
         except SolverError as exc:
+            logger.info("captcha kind=%s: cannot fetch a problem: %s", kind, exc.description)
             last_error = exc
             continue
         while problem is not None and rounds < max_rounds:
-            if deadline is not None and time.monotonic() > deadline:
-                raise SolverError(ERROR_TASK_TIMEOUT, "captcha deadline exceeded")
+            check_stop(deadline, cancel, "captcha")
             rounds += 1
             t0 = time.monotonic()
             try:
@@ -194,27 +236,32 @@ def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
                 last_error = exc
                 break  # try the next kind (e.g. audio when the grid model lacks a class)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+            check_stop(deadline, cancel, "captcha")
             # a human never answers in a few ms; report a plausible solve time
             verdict = submit_solution(session, ctx, problem, solution,
-                                      max(elapsed_ms, 3500 + 400 * rounds), timeout)
+                                      max(elapsed_ms, 3500 + 400 * rounds), timeout, deadline)
             voucher = verdict.get("captcha_voucher")
+            success = verdict.get("success")
             logger.info("captcha round=%d type=%s success=%s provided=%s required=%s voucher=%s",
-                        rounds, problem.get("problem_type"), verdict.get("success"),
+                        rounds, problem.get("problem_type"), success,
                         verdict.get("num_solutions_provided"),
                         verdict.get("num_solutions_required"), bool(voucher))
-            if voucher and verdict.get("success") is not False:
+            if isinstance(voucher, str) and voucher and success is not False:
                 token = None
                 if redeem:
                     token = exchange_voucher(session, ctx, voucher, verdict.get("region") or
-                                             problem.get("region"), existing_token, timeout)
+                                             problem.get("region"), existing_token, timeout,
+                                             deadline)
                 return CaptchaResult(voucher=voucher, token=token, rounds=rounds)
-            if verdict.get("success") is True:
+            nxt = verdict.get("problem")
+            problem = nxt if isinstance(nxt, dict) and nxt else None
+            if success is True:
                 # correct, but the site requires more solved problems
-                last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE, "ran out of rounds")
+                last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE,
+                                         "more problems required than rounds allowed"
+                                         if problem is not None else
+                                         "answer accepted but no voucher and no next problem")
             else:
                 last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE,
                                          f"answer rejected: {verdict.get('reason') or 'wrong'}")
-            problem = verdict.get("problem") or None
-        if rounds >= max_rounds:
-            break
     raise last_error or SolverError(ERROR_CAPTCHA_UNSOLVABLE, "captcha not solved")

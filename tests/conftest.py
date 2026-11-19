@@ -54,7 +54,7 @@ def grid_problem(target="clock", n=9, region="eu-central-1") -> dict:
 class FakeSession(requests.Session):
     """
     requests.Session whose request() is answered by scripted routes.
-    A route is (method, url_prefix, handler(request_kwargs) -> (status, body)).
+    A route is (method, url_prefix, handler(request_kwargs) -> (status, body[, headers])).
     Routes are matched in order; a route with times=1 is consumed after use.
     """
 
@@ -79,16 +79,22 @@ class FakeSession(requests.Session):
                 result = handler(kwargs)
                 if isinstance(result, Exception):
                     raise result
-                status, body = result
+                status, body, *extra = result
                 resp = requests.Response()
                 resp.status_code = status
                 resp.url = url
                 if isinstance(body, (dict, list)):
-                    resp._content = json.dumps(body).encode()
+                    content = json.dumps(body).encode()
                     resp.headers["content-type"] = "application/json"
+                elif isinstance(body, bytes):
+                    content = body
                 else:
-                    resp._content = str(body).encode()
+                    content = str(body).encode()
                     resp.headers["content-type"] = "text/html"
+                if extra:
+                    resp.headers.update(extra[0])
+                resp.raw = io.BytesIO(content)  # streamed like a real response
+                resp.encoding = "utf-8"
                 return resp
         raise AssertionError(f"unexpected request {method} {url}")
 
@@ -96,3 +102,25 @@ class FakeSession(requests.Session):
 @pytest.fixture
 def fake_session():
     return FakeSession()
+
+
+PUBLIC_IP = "93.184.216.34"
+
+
+@pytest.fixture(autouse=True)
+def fake_dns(monkeypatch):
+    """
+    Offline DNS for the SSRF guard: every name resolves to a public address unless the
+    test maps it (name -> list of addresses, or an OSError instance to fail resolution).
+    """
+    from aws_capsolver.waf import http as httpmod
+    table = {}
+
+    def resolve(host):
+        answer = table.get(host, [PUBLIC_IP])
+        if isinstance(answer, Exception):
+            raise answer
+        return list(answer)
+
+    monkeypatch.setattr(httpmod, "_resolve", resolve)
+    return table

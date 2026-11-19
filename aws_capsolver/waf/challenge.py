@@ -14,13 +14,15 @@ fresh /inputs.
 
 import json
 import logging
+import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
 from . import pow as powlib
-from .errors import ERROR_CAPTCHA_UNSOLVABLE, ERROR_TASK_TIMEOUT, SolverError
+from .errors import (ERROR_CAPTCHA_UNSOLVABLE, ERROR_SERVICE_UNAVAILABLE, ERROR_TASK_TIMEOUT,
+                     SolverError)
 from .http import request_json
 
 logger = logging.getLogger(__name__)
@@ -42,16 +44,39 @@ def candidate_kinds(challenge_type: str) -> List[str]:
     return CANDIDATES.get(challenge_type, ALL_KINDS)
 
 
+def check_stop(deadline: Optional[float], cancel: Optional[threading.Event],
+               what: str) -> None:
+    """Raise when the task was cancelled (service shutdown) or ran out of time."""
+    if cancel is not None and cancel.is_set():
+        raise SolverError(ERROR_SERVICE_UNAVAILABLE, f"{what}: service is shutting down")
+    if deadline is not None and time.monotonic() > deadline:
+        raise SolverError(ERROR_TASK_TIMEOUT, f"{what}: deadline exceeded")
+
+
 def compute_solution(kind: str, challenge: dict, difficulty: int, memory: int,
-                     processes: Optional[int], deadline: Optional[float] = None) -> str:
+                     processes: Optional[int], deadline: Optional[float] = None,
+                     cancel: Optional[threading.Event] = None) -> str:
     if kind == powlib.KIND_BANDWIDTH:
         return powlib.solve_bandwidth(difficulty)
-    solution = powlib.solve_hashcash(kind, challenge.get("input", ""), challenge.get("hmac") or "",
-                                     difficulty, memory=memory, processes=processes,
-                                     deadline=deadline)
+    solution = powlib.solve_hashcash(kind, str(challenge.get("input") or ""),
+                                     str(challenge.get("hmac") or ""), difficulty,
+                                     memory=memory, processes=processes, deadline=deadline,
+                                     cancel=cancel)
     if solution is None:
+        check_stop(deadline, cancel, f"{kind} hashcash")
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"{kind} hashcash found no solution")
     return solution
+
+
+def _as_difficulty(value: Any) -> Optional[int]:
+    """The difficulty as an int; numeric strings are accepted, bools are not."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 def _verify_body(challenge: dict, solution: Optional[str], domain: str,
@@ -73,6 +98,7 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
                     scrypt_memory: int = powlib.DEFAULT_SCRYPT_MEMORY,
                     processes: Optional[int] = None,
                     deadline: Optional[float] = None,
+                    cancel: Optional[threading.Event] = None,
                     sleep: Callable[[float], None] = time.sleep) -> str:
     """Run the proof-of-work exchange and return a fresh aws-waf-token."""
     headers = {"accept": "*/*", "origin": f"https://{domain}", "referer": f"https://{domain}/"}
@@ -82,15 +108,15 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
     kinds: Optional[List[str]] = None
 
     while True:
-        if deadline is not None and time.monotonic() > deadline:
-            raise SolverError(ERROR_TASK_TIMEOUT, "challenge deadline exceeded")
+        check_stop(deadline, cancel, "challenge")
         inputs = request_json(session, "GET", f"{token_base}/inputs", "challenge /inputs",
-                              timeout, params={"client": "browser"}, headers=headers)
+                              timeout, deadline, params={"client": "browser"}, headers=headers)
         challenge = inputs.get("challenge")
         challenge_type = inputs.get("challenge_type")
-        difficulty = inputs.get("difficulty")
-        if not isinstance(challenge, dict) or not challenge.get("input") or not challenge_type \
-                or not isinstance(difficulty, int):
+        difficulty = _as_difficulty(inputs.get("difficulty"))
+        if not isinstance(challenge, dict) or not challenge.get("input") \
+                or not isinstance(challenge_type, str) or not challenge_type \
+                or difficulty is None:
             raise SolverError(ERROR_CAPTCHA_UNSOLVABLE,
                               f"unexpected /inputs response (keys={sorted(inputs)})")
         if kinds is None:
@@ -104,7 +130,7 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
         t0 = time.monotonic()
         try:
             solution = compute_solution(kind, challenge, difficulty, scrypt_memory, processes,
-                                        deadline)
+                                        deadline, cancel)
         except ValueError as exc:  # e.g. bandwidth difficulty outside the known table
             last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE, str(exc))
             continue
@@ -117,22 +143,22 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
                 multipart = dict(body, solution=None)
                 result = request_json(
                     session, "POST", f"{token_base}/mp_verify", "challenge /mp_verify",
-                    timeout * 2, headers=headers,
+                    timeout * 2, deadline, headers=headers,
                     files={"challenge": (None, json.dumps(multipart)),
                            "solution_data": (None, solution)})
             else:
                 result = request_json(session, "POST", f"{token_base}/verify",
-                                      "challenge /verify", timeout, headers=headers,
+                                      "challenge /verify", timeout, deadline, headers=headers,
                                       json=body)
         except SolverError as exc:
-            if exc.code == "HTTP_400":
+            if exc.http_status == 400:
                 logger.warning("pow kind=%s rejected (400), trying next candidate", kind)
                 last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE, exc.description)
                 sleep(0.2)
                 continue
             raise
         token = result.get("token")
-        if not token:
+        if not isinstance(token, str) or not token:
             raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"verify returned no token "
                               f"(keys={sorted(result)})")
         logger.info("pow token acquired in %.2fs (kind=%s)", time.monotonic() - started, kind)

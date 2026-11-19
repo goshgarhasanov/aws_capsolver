@@ -85,12 +85,19 @@ def test_as_list_and_solutions():
     assert cap.normalise_audio_answer("  Hello World ") == "hello world"
 
 
+class _Calls(list):
+    """(n_images, target) per classify_grid call; `.counts` holds the count keyword."""
+    counts: list
+
+
 @pytest.fixture
 def fake_vision(monkeypatch):
-    calls = []
+    calls = _Calls()
+    calls.counts = []
 
-    def classify_grid(images, target):
+    def classify_grid(images, target, count=None):
         calls.append((len(images), target))
+        calls.counts.append(count)
         return [4, 1] if len(calls) > 1 else [0]
 
     monkeypatch.setattr(vision_bridge, "classify_grid", classify_grid)
@@ -117,6 +124,7 @@ def test_captcha_retry_then_voucher(fake_session, fake_vision):
     result = cap.solve_captcha(fake_session, ctx, existing_token="POW")
     assert result.token == "FINAL" and result.rounds == 2
     assert fake_vision == [(9, "clock"), (9, "bed")]
+    assert fake_vision.counts == [5, 5]  # from problem_type gridcaptcha-5-...
     assert verifies[0]["client_solution"] == [0] and verifies[1]["client_solution"] == [1, 4]
     assert verifies[0]["goku_props"] == {"key": "k", "iv": "i", "context": "c"}
     assert verifies[0]["metrics"]["solve_time_millis"] > 0
