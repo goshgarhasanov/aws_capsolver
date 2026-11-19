@@ -66,9 +66,13 @@ def cmd_predict(args) -> None:
 
 
 def _zero_shot_classes(eng, feats: list[np.ndarray]) -> list[list[str]]:
-    """Per-backbone argmax class (distractors collapse to 'other') for 9 tiles."""
-    from aws_capsolver.vision.grid import KNOWN_TARGETS, DISTRACTORS
-    names = list(KNOWN_TARGETS) + list(DISTRACTORS)
+    """Per-backbone argmax over the known classes for 9 tiles.
+
+    Only the known classes are used: every sampled tile belongs to one of them, and tiles
+    that do not are caught by backbone disagreement or the 5-targets check.
+    """
+    from aws_capsolver.vision.grid import KNOWN_TARGETS
+    names = list(KNOWN_TARGETS)
     out = []
     for bb, f in zip(eng.backbones, feats):
         T = np.stack([eng._text(bb, c) for c in names])

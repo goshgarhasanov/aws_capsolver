@@ -9,8 +9,8 @@ Pipeline
    For a target the head does not know (or when no compatible head is installed) zero-shot
    CLIP is used instead: prompt-ensembled text embeddings of the target contrasted with
    every other known class and a set of distractor objects.
-3. Selection: ``gridcaptcha-5-*`` grids always contain exactly 5 target tiles, so by
-   default the 5 most probable tiles are returned. An explicit ``threshold`` switches to
+3. Selection: ``gridcaptcha-5-*`` grids contain exactly 5 target tiles (true for all 1000
+   labelled sample grids), so by default the 5 most probable tiles are returned. An explicit ``threshold`` switches to
    "every tile with P >= threshold".
 
 Environment variables
@@ -59,7 +59,7 @@ MAX_TILE_SIDE = 1024
 
 TileInput = Union[bytes, bytearray, memoryview, str]
 
-# Every sampled AWS WAF grid tile belonged to one of these 7 object classes.
+# 8999 of 9000 sampled tiles (1000 grids, Nov 2026) show one of these 7 object classes.
 KNOWN_TARGETS: tuple[str, ...] = (
     "bag", "bed", "bucket", "chair", "clock", "curtain", "hat",
 )
@@ -268,7 +268,7 @@ class GridEngine:
         if W.shape != (len(classes), dim) or b.shape != (len(classes),):
             log.warning("head %s has shape %s, expected (%d, %d); ignoring it", path, W.shape, len(classes), dim)
             return None
-        return {"classes": classes, "W": W, "b": b,
+        return {"classes": classes, "W": W, "b": b, "trained_on": str(head.get("trained_on", "unknown")),
                 "threshold": float(head.get("threshold", DEFAULT_THRESHOLD)),
                 "thresholds": {str(k): float(v) for k, v in dict(head.get("thresholds", {})).items()}}
 
@@ -314,6 +314,8 @@ class GridEngine:
 
     # -------------------------------------------------------------------- scoring
     def knows(self, target: str) -> bool:
+        if target == "other":
+            return False
         return target in KNOWN_TARGETS or (self.head is not None and target in self.head["classes"])
 
     def zero_shot_probs(self, feats: list[np.ndarray], target: str) -> np.ndarray:
@@ -327,7 +329,7 @@ class GridEngine:
         return np.mean(probs, axis=0)
 
     def head_probs(self, feats: list[np.ndarray], target: str) -> np.ndarray | None:
-        if self.head is None or target not in self.head["classes"]:
+        if self.head is None or target == "other" or target not in self.head["classes"]:
             return None
         x = np.concatenate(feats, axis=1)
         p = _softmax(x @ self.head["W"].T + self.head["b"])

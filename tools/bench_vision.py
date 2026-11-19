@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -33,13 +34,33 @@ COMPARE = [
 ]
 
 
+def wilson_lower(k: int, n: int, z: float = 1.96) -> float:
+    """95% Wilson score lower bound of a binomial proportion."""
+    if n == 0:
+        return 0.0
+    p = k / n
+    den = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return (centre - half) / den
+
+
+def novel_tiles(engine, gids: list[str], train: list[str], cos: float = 0.95) -> dict[str, np.ndarray]:
+    """Per grid, a bool mask of tiles without a near-duplicate (cosine > ``cos``) in train."""
+    emb = vd.embeddings(engine, sorted(set(gids) | set(train)), 0)
+    if not train:
+        return {g: np.ones(9, bool) for g in gids}
+    T = np.concatenate([emb[g] for g in train])
+    return {g: (emb[g] @ T.T).max(1) <= cos for g in gids}
+
+
 def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, count: int | None = 5) -> dict:
     from aws_capsolver.vision.grid import select_tiles, normalize_target
 
-    tl = vd.train_labels()
+    labels = vd.train_labels()
     per_bb = [vd.embeddings(engine, gids, k) for k in range(len(engine.specs))]
     tiles_ok = grids_ok = 0
-    errors = []
+    errors, margins, ok_by_grid, tile_ok = [], [], {}, {}
     for g in gids:
         t = normalize_target(vd.target(g))
         feats = [pb[g] for pb in per_bb]
@@ -52,27 +73,34 @@ def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, c
         else:
             thr = threshold if threshold is not None else (engine.default_threshold(t) if use_head else 0.5)
             pred = set(select_tiles(s, thr))
-        truth = set(vd.grid_answer(g, tl[g]))
+        truth = set(vd.grid_answer(g, labels[g]))
+        srt = np.sort(s)[::-1]
+        if count and len(srt) > count:
+            margins.append(float(srt[count - 1] - srt[count]))
         tiles_ok += sum((i in pred) == (i in truth) for i in range(9))
+        ok_by_grid[g] = pred == truth
+        tile_ok[g] = np.array([(i in pred) == (i in truth) for i in range(9)])
         if pred == truth:
             grids_ok += 1
         else:
             errors.append({"grid": g, "target": t, "pred": sorted(pred), "truth": sorted(truth),
                            "method": method, "scores": [round(float(x), 3) for x in s]})
     n = len(gids)
-    return {"grids": n, "tile_acc": tiles_ok / (9 * n) if n else 0.0,
-            "grid_acc": grids_ok / n if n else 0.0, "errors": errors}
+    return {"grids": n, "grids_ok": grids_ok, "tile_acc": tiles_ok / (9 * n) if n else 0.0,
+            "grid_acc": grids_ok / n if n else 0.0, "errors": errors, "ok": ok_by_grid, "tile_ok": tile_ok,
+            "min_margin": min(margins) if margins else None,
+            "p1_margin": float(np.percentile(margins, 1)) if margins else None}
 
 
 def latency(engine, n: int = 10) -> float:
     from aws_capsolver.vision.grid import select_tiles
 
-    gids = vd.list_grids()[:n]
+    gids = (vd.splits()["test"] or vd.list_grids())[:n]
     engine.scores(vd.tiles(gids[0]), vd.target(gids[0]))  # warm-up
     t0 = time.perf_counter()
     for g in gids:
         s, _ = engine.scores(vd.tiles(g), vd.target(g))
-        select_tiles(s, 0.5)
+        select_tiles(s, count=5)
     return (time.perf_counter() - t0) / len(gids)
 
 
@@ -99,11 +127,23 @@ def main() -> None:
     for specs in runs:
         eng = GridEngine(specs=specs, head_path="none" if args.no_head else None,
                          tta=args.tta, threads=args.threads or None)
+        if eng.head is not None and eng.head.get("trained_on", "train") != "train" and args.split != "train":
+            print(f"WARNING: head was trained on {eng.head['trained_on']}; {args.split} is NOT held out",
+                  file=sys.stderr)
         res = evaluate(eng, gids, args.threshold, use_head=not args.no_head, count=args.count)
+        novel = novel_tiles(eng, gids, sp["train"])
+        n_nov = sum(int(m.sum()) for m in novel.values())
+        ok_nov = sum(int(res["tile_ok"][g][m].sum()) for g, m in novel.items())
         lat = latency(eng)
+        mode = f"top{args.count}" if args.count and args.threshold is None else "threshold"
         row = {"models": eng.specs, "head": bool(eng.head) and not args.no_head, "tta": eng.tta,
-               "split": args.split, "mode": f"top{args.count}" if args.count and args.threshold is None else "threshold", "grids": res["grids"], "tile_acc": round(res["tile_acc"], 4),
-               "grid_acc": round(res["grid_acc"], 4), "latency_s": round(lat, 3)}
+               "split": args.split, "mode": mode, "grids": res["grids"], "grids_ok": res["grids_ok"],
+               "grid_acc": round(res["grid_acc"], 4),
+               "grid_acc_wilson95_low": round(wilson_lower(res["grids_ok"], res["grids"]), 4),
+               "tile_acc": round(res["tile_acc"], 4),
+               "novel_tiles": n_nov, "novel_tile_acc": round(ok_nov / n_nov, 4) if n_nov else None,
+               "min_top5_margin": None if res["min_margin"] is None else round(res["min_margin"], 4),
+               "latency_s": round(lat, 3)}
         rows.append(row)
         print(json.dumps(row), flush=True)
         for e in res["errors"][:args.show_errors]:
