@@ -65,3 +65,9 @@ def test_bandwidth_sizes():
 def test_bad_difficulty():
     with pytest.raises(ValueError):
         powlib.solve_hashcash("sha256", "x", "", -1)
+
+
+def test_hashcash_deadline():
+    import time
+    assert powlib.solve_hashcash("sha256", "x", "", 60, processes=2,
+                                 deadline=time.monotonic() - 1) is None

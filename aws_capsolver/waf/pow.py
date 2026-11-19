@@ -15,6 +15,7 @@ import base64
 import hashlib
 import logging
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
@@ -61,8 +62,12 @@ def _search(kind: str, base: str, salt: str, difficulty: int, memory: int,
 
 def solve_hashcash(kind: str, challenge_input: str, hmac: str, difficulty: int,
                    memory: int = DEFAULT_SCRYPT_MEMORY, processes: Optional[int] = None,
-                   max_iterations: int = MAX_ITERATIONS) -> Optional[str]:
-    """Return the counter string solving the hashcash, or None when the budget runs out."""
+                   max_iterations: int = MAX_ITERATIONS,
+                   deadline: Optional[float] = None) -> Optional[str]:
+    """
+    Return the counter string solving the hashcash, or None when the iteration budget
+    or the monotonic `deadline` runs out (the deadline is checked between batches).
+    """
     if kind not in (KIND_SHA256, KIND_SCRYPT):
         raise ValueError(f"not a hashcash kind: {kind}")
     if not isinstance(difficulty, int) or difficulty < 0 or difficulty > 64:
@@ -83,6 +88,9 @@ def solve_hashcash(kind: str, challenge_input: str, hmac: str, difficulty: int,
     with pool:
         start = 0
         while start < max_iterations:
+            if deadline is not None and time.monotonic() > deadline:
+                logger.error("%s hashcash: deadline reached after %d iterations", kind, start)
+                return None
             futures = []
             for _ in range(processes):
                 stop = min(start + chunk, max_iterations)

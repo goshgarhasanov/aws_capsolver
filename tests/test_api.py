@@ -1,4 +1,3 @@
-import base64
 import json
 import threading
 import time
@@ -196,3 +195,7 @@ def test_parse_proxy(raw, expected):
 def test_parse_proxy_rejects(raw):
     with pytest.raises(SolverError):
         parse_proxy(raw)
+
+
+def test_parse_proxy_password_with_colon():
+    assert parse_proxy("h:1:u:pa:ss") == "http://u:pa%3Ass@h:1"

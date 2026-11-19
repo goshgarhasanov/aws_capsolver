@@ -87,8 +87,8 @@ def solve_website(req: SolveRequest, settings: SolverSettings,
     user_agent = session.headers["user-agent"]
     t = settings.http_timeout
 
-    have_params = bool(req.challenge_js or req.problem_url or
-                       (req.aws_key and req.aws_iv and req.aws_context))
+    # gokuProps alone are not enough: the script URLs name the WAF endpoints
+    have_params = bool(req.challenge_js or req.problem_url)
     page_status, page_params = None, None
     if not have_params:
         page_status, html = _fetch_page(session, req.website_url, t)

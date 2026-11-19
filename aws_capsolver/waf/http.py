@@ -47,6 +47,8 @@ def parse_proxy(proxy: Any) -> Optional[str]:
     scheme = "http"
     if parts and parts[0].lower() in _SCHEMES:
         scheme = parts.pop(0).lower()
+    if len(parts) > 4:  # a password containing ':'
+        parts = parts[:3] + [":".join(parts[3:])]
     if len(parts) not in (2, 4) or not parts[1].isdigit():
         raise SolverError(ERROR_INVALID_TASK_DATA,
                           "proxy must be scheme:host:port[:user:pass] or a proxy URL")

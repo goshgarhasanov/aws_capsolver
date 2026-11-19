@@ -113,6 +113,8 @@ def classify(task: Dict[str, Any]) -> Dict[str, Any]:
             if not target:
                 raise SolverError(ERROR_INVALID_TASK_DATA, "grid question without a target")
             objects = sorted({int(i) for i in vision_bridge.classify_grid(decoded, target)})
+            if any(i < 0 or i >= len(decoded) for i in objects):
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"classifier returned {objects}")
             return {"objects": objects}
         if family == "toycarcity":
             x, y = vision_bridge.solve_toycar(decoded[0])

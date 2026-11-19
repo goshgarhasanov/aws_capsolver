@@ -194,3 +194,15 @@ def test_solve_website_bad_url():
     with pytest.raises(SolverError) as err:
         solvermod.solve_website(solvermod.SolveRequest("ftp://x"), solvermod.SolverSettings())
     assert err.value.code == "ERROR_INVALID_TASK_DATA"
+
+
+def test_goku_only_params_still_fetch_page(fake_session, monkeypatch):
+    _patch_session(monkeypatch, fake_session)
+    fake_session.add("GET", "https://shop.example/", lambda kw: (200, CHALLENGE_ONLY_PAGE))
+    fake_session.add("GET", f"{TOKEN_BASE}/inputs", _inputs(HASH_A9F))
+    fake_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (200, {"token": "TOK"}))
+    out = solvermod.solve_website(
+        solvermod.SolveRequest("https://shop.example/", aws_key="K2", aws_iv="I2",
+                               aws_context="C2"),
+        solvermod.SolverSettings(verify_token=False))
+    assert out.token == "TOK"

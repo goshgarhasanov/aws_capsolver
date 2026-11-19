@@ -43,11 +43,12 @@ def candidate_kinds(challenge_type: str) -> List[str]:
 
 
 def compute_solution(kind: str, challenge: dict, difficulty: int, memory: int,
-                     processes: Optional[int]) -> str:
+                     processes: Optional[int], deadline: Optional[float] = None) -> str:
     if kind == powlib.KIND_BANDWIDTH:
         return powlib.solve_bandwidth(difficulty)
     solution = powlib.solve_hashcash(kind, challenge.get("input", ""), challenge.get("hmac") or "",
-                                     difficulty, memory=memory, processes=processes)
+                                     difficulty, memory=memory, processes=processes,
+                                     deadline=deadline)
     if solution is None:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"{kind} hashcash found no solution")
     return solution
@@ -102,7 +103,8 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
 
         t0 = time.monotonic()
         try:
-            solution = compute_solution(kind, challenge, difficulty, scrypt_memory, processes)
+            solution = compute_solution(kind, challenge, difficulty, scrypt_memory, processes,
+                                        deadline)
         except ValueError as exc:  # e.g. bandwidth difficulty outside the known table
             last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE, str(exc))
             continue
