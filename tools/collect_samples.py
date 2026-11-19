@@ -35,13 +35,9 @@ class Source:
     domain: str   # protected host name sent as ?domain=
 
 
+# Only this endpoint is an approved sample source (read-only GET /problem at a polite rate).
+# Do not add third-party sites, and never submit answers (/verify) to a real site's WAF.
 SOURCES = [
-    Source("officeworks",
-           "https://db02010d94bb.c864d3c5.eu-central-1.captcha.awswaf.com/db02010d94bb/b4e7dcbb99d9/7b880e4c169a",
-           "www.officeworks.com.au"),
-    Source("slicktext",
-           "https://9173f8eb4e97.a7e72420.us-west-2.captcha.awswaf.com/9173f8eb4e97/ded1f1bde754/77e5f9a9cd94",
-           "www.slicktext.com"),
     Source("blspoland",
            "https://c7be39fcf8e1.3c71dd20.eu-central-1.captcha.awswaf.com/c7be39fcf8e1/3ad2c8da74d4/c957f8af1db3",
            "appointment.blspolandvisa.com"),
