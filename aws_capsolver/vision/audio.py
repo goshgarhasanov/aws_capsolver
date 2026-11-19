@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
@@ -44,6 +45,7 @@ SR = 16000
 HOP = 160                     # 10 ms envelope frames
 MAX_CLIP_BYTES = 2_000_000    # real clips are ~55 kB
 MAX_SECONDS = 30.0
+DECODE_TIMEOUT_S = 5.0
 
 MODEL_NAME = os.environ.get("AWS_CAPSOLVER_AUDIO_MODEL", "small.en")
 CPU_THREADS = int(os.environ.get("AWS_CAPSOLVER_AUDIO_THREADS", "8"))
@@ -87,7 +89,11 @@ class AudioDecodeError(UnsupportedProblem, InvalidInput):
 
 def decode_audio(data: bytes) -> np.ndarray:
     """Decode an ADTS/AAC (or any ffmpeg-readable) clip to mono float32 at 16 kHz."""
-    import av  # PyAV ships its own ffmpeg; imported lazily
+    try:
+        import av  # PyAV bundles its own ffmpeg libraries; no ffmpeg binary is needed
+    except ImportError as exc:
+        raise AudioDecodeError(f"PyAV (pip install av) is required to decode audio: {exc}") \
+            from exc
 
     if not data:
         raise AudioDecodeError("empty audio clip")
@@ -99,14 +105,19 @@ def decode_audio(data: bytes) -> np.ndarray:
             if not container.streams.audio:
                 raise AudioDecodeError("no audio stream in clip")
             resampler = av.AudioResampler(format="flt", layout="mono", rate=SR)
+            deadline = time.monotonic() + DECODE_TIMEOUT_S
+            total = 0
             for frame in container.decode(audio=0):
                 for out in resampler.resample(frame):
                     chunks.append(out.to_ndarray().reshape(-1))
-                if sum(len(c) for c in chunks) > MAX_SECONDS * SR:
+                    total += len(chunks[-1])
+                if total > MAX_SECONDS * SR:
                     raise AudioDecodeError("audio clip too long")
+                if time.monotonic() > deadline:
+                    raise AudioDecodeError(f"audio decoding exceeded {DECODE_TIMEOUT_S}s")
             for out in resampler.resample(None):
                 chunks.append(out.to_ndarray().reshape(-1))
-    except av.error.FFmpegError as exc:
+    except (av.error.FFmpegError, ValueError, OSError) as exc:
         raise AudioDecodeError(f"cannot decode audio: {exc}") from exc
     if not chunks:
         raise AudioDecodeError("audio clip decodes to nothing")
@@ -230,7 +241,7 @@ def cut_segment(x: np.ndarray, seg: Segment) -> Tuple[np.ndarray, int]:
 
 # --------------------------------------------------------------------------- text
 
-_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+_WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?")
 
 
 def normalise(text: str) -> str:
@@ -327,13 +338,21 @@ class AudioSolver:
 
     def solve(self, x: np.ndarray) -> str:
         cands, score = self.candidates(x)
-        if cands:
-            best = max(cands, key=lambda c: c.score)
-            word = best.text.split()
-            # several words in one run: the longest one is the safest guess
-            return max(word, key=len) if len(word) > 1 else best.text
+        answer = choose_answer(cands)
+        if answer:
+            return answer
         logger.info("audio: template score %.2f, no candidate; using fallback", score)
         return self.fallback(x)
+
+
+def choose_answer(cands: Sequence[Candidate]) -> str:
+    """Pick the one word to submit: the most confident single-word run wins."""
+    if not cands:
+        return ""
+    best = max(cands, key=lambda c: c.score)
+    words = best.text.split()
+    # several words in one run (background leaked in): the longest is the safest guess
+    return max(words, key=len) if len(words) > 1 else best.text
 
 
 _solver: Optional[AudioSolver] = None
@@ -346,7 +365,11 @@ def get_solver() -> AudioSolver:
         with _solver_lock:
             if _solver is None:
                 logger.info("audio: loading faster-whisper model %s", MODEL_NAME)
-                _solver = AudioSolver()
+                try:
+                    _solver = AudioSolver()
+                except Exception as exc:  # ImportError, download/IO errors, CTranslate2
+                    raise UnsupportedProblem(
+                        f"audio model {MODEL_NAME!r} could not be loaded: {exc}") from exc
     return _solver
 
 
@@ -360,4 +383,5 @@ def transcribe(audio_b64: str) -> str:
 
 
 __all__ = ["transcribe", "decode_b64", "decode_audio", "locate_instruction",
-           "find_word_segments", "normalise", "AudioSolver", "AudioDecodeError"]
+           "find_word_segments", "normalise", "choose_answer", "AudioSolver",
+           "AudioDecodeError"]
