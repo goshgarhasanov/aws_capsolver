@@ -273,3 +273,21 @@ def test_end_to_end_real_sample():
     answer = A.transcribe(_sample_b64())
     assert answer and answer == answer.strip().lower()
     assert len(answer.split()) == 1
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("theater theater theater", "theater"),
+    ("reputation reputation get reputation get", "reputation get"),
+    ("a b a b a", "a b"),
+    ("a b c", "a b c"),
+    ("", ""),
+])
+def test_collapse_repeats(raw, expected):
+    assert A.collapse_repeats(raw) == expected
+
+
+@pytest.mark.parametrize("n,words", [(0, "zero"), (13, "thirteen"), (40, "forty"),
+                                     (99, "ninety nine"), (305, "three hundred five"),
+                                     (2026, "two thousand twenty six")])
+def test_number_to_words(n, words):
+    assert A.number_to_words(n) == words

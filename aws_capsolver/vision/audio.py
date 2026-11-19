@@ -137,13 +137,17 @@ def decode_audio(data: bytes) -> np.ndarray:
 
 
 def decode_b64(audio_b64: str) -> np.ndarray:
+    """Decode the base64 clip of a problem (``assets.audio``; a data: URI is accepted)."""
     if not isinstance(audio_b64, str) or not audio_b64.strip():
         raise AudioDecodeError("audio must be a non-empty base64 string")
     text = audio_b64.strip()
     if text.startswith("data:"):
         text = text.split(",", 1)[-1]
+    text = "".join(text.split())  # tolerate line breaks
+    if len(text) > MAX_CLIP_BYTES * 4 // 3 + 4:
+        raise AudioDecodeError(f"audio clip too large ({len(text)} base64 chars)")
     try:
-        data = base64.b64decode(text + "=" * (-len(text) % 4), validate=False)
+        data = base64.b64decode(text + "=" * (-len(text) % 4), validate=True)
     except (binascii.Error, ValueError) as exc:
         raise AudioDecodeError(f"invalid base64 audio: {exc}") from exc
     return decode_audio(data)
@@ -419,8 +423,10 @@ class AudioSolver:
         if not clips:
             return []
         longest = max(len(c) for c in clips)
-        n = max(int((self.window_s or 30.0) * SR), longest)
+        # whisper's encoder holds at most 30 s (3000 frames); word cuts are <= ~2.5 s
+        n = min(max(int((self.window_s or 30.0) * SR), longest), 30 * SR)
         n = int(np.ceil(n / HOP)) * HOP
+        clips = [c[:n] for c in clips]
         feats = []
         for c in clips:
             padded = np.zeros(n, dtype=np.float32)
@@ -501,7 +507,7 @@ class AudioSolver:
         ref = np.percentile(loudness, 90)
         best = [(loudness[i] + 3 * words[i].probability, tokens[i])
                 for i in range(start, len(tokens))
-                if tokens[i] and loudness[i] > ref - 8]
+                if len(tokens[i]) >= 3 and " " not in tokens[i] and loudness[i] > ref - 8]
         return max(best)[1] if best else ""
 
     def solve(self, x: np.ndarray) -> str:

@@ -85,7 +85,7 @@ def cmd_transcribe(args) -> None:
     done = json.loads(out_path.read_text()) if out_path.exists() else {}
     solver = make_solver(args)
     for i, cid in enumerate(clip_ids()):
-        if cid in done:
+        if cid in done or (args.split != "all" and split_of(cid) != args.split):
             continue
         x = load_clip(cid)
         segs, score, rel = segments_of(x, solver.seg)
@@ -183,6 +183,7 @@ def main() -> None:
     p.add_argument("--model", required=True)
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--beam", type=int, default=5)
+    p.add_argument("--split", choices=["dev", "test", "all"], default="all")
     p.add_argument("--window", type=float, default=0.0,
                    help="encoder window in seconds; 0 = stock faster-whisper pipeline")
     p = sub.add_parser("label")
