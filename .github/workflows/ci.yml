@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # tests that need the CLIP / whisper backbones skip themselves with this flag;
+      # the hub is kept offline so nothing tries to download weights in CI
+      AWS_CAPSOLVER_SKIP_MODEL_TESTS: "1"
+      HF_HUB_OFFLINE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            .github/workflows/ci.yml
+
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install CPU-only torch
+        run: pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+
+      - name: Install dependencies
+        run: |
+          grep -vE '^\s*(#|$)|playwright' requirements.txt > /tmp/req-ci.txt
+          pip install -r /tmp/req-ci.txt numpy open_clip_torch faster-whisper av scipy
+
+      - name: Byte-compile
+        run: python -m compileall -q aws_capsolver tools clients/python
+
+      - name: Tests
+        run: python -m pytest -q -rs
+
+      - name: Smoke test the server and the Python client
+        run: |
+          AWSCS_WARMUP=0 AWSCS_KEYS=ci-key python -m aws_capsolver serve --port 8790 &
+          for i in $(seq 30); do curl -sf localhost:8790/health && break; sleep 1; done
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "clients/python")
+          from aws_capsolver_client import AwsCapsolverClient, CapsolverError
+          c = AwsCapsolverClient("http://127.0.0.1:8790", "ci-key")
+          assert c.health()["ok"]
+          assert c.get_balance()["errorId"] == 0
+          try:
+              c.create_task({"type": "Nope"})
+          except CapsolverError as exc:
+              assert exc.code == "ERROR_TASK_NOT_SUPPORTED", exc
+          else:
+              raise AssertionError("expected ERROR_TASK_NOT_SUPPORTED")
+          print("smoke ok")
+          PY
