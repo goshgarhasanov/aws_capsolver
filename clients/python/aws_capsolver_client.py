@@ -33,7 +33,7 @@ ERROR_CLIENT_TRANSPORT = "ERROR_CLIENT_TRANSPORT"
 
 
 class WafSolution(TypedDict, total=False):
-    cookie: str            # aws-waf-token value
+    cookie: str            # aws-waf-token value; "" for a voucher-only outcome
     userAgent: str         # send it with the cookie
     captchaVoucher: str    # present when a CAPTCHA was solved
 

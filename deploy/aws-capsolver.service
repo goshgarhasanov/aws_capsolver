@@ -21,6 +21,7 @@ Environment=AWSCS_HOST=127.0.0.1
 Environment=AWSCS_PORT=8790
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/default/aws-capsolver
+# one process only (in-memory task registry): scale with AWSCS_WORKERS, not uvicorn --workers
 ExecStart=/opt/aws_capsolver/.venv/bin/python -m aws_capsolver serve --host ${AWSCS_HOST} --port ${AWSCS_PORT}
 Restart=on-failure
 RestartSec=5

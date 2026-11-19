@@ -53,4 +53,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import json,sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8790/health', timeout=4); sys.exit(0 if json.load(r).get('ok') else 1)"
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
+# exactly one process: the task registry is in memory; scale with AWSCS_WORKERS, never --workers
 CMD ["python", "-m", "aws_capsolver", "serve", "--host", "0.0.0.0", "--port", "8790"]

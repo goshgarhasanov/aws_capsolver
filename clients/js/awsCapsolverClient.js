@@ -20,6 +20,7 @@ export const ERROR_CLIENT_TRANSPORT = "ERROR_CLIENT_TRANSPORT";
 
 /**
  * @typedef {{cookie: string, userAgent: string, captchaVoucher?: string}} WafSolution
+ *   cookie is "" for a voucher-only outcome (CAPTCHA solved, no token host to redeem at)
  * @typedef {{objects: number[]}} GridSolution
  * @typedef {{box: [number, number]}} ToycarSolution
  */

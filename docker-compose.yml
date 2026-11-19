@@ -9,7 +9,7 @@ services:
       - "127.0.0.1:8790:8790"     # expose publicly only behind a reverse proxy / firewall
     environment:
       AWSCS_KEYS: ${AWSCS_KEYS:-}
-      AWSCS_WORKERS: ${AWSCS_WORKERS:-8}
+      AWSCS_WORKERS: ${AWSCS_WORKERS:-8}   # concurrency knob; the container runs ONE process - do not add --workers or replicas without sticky routing
       AWSCS_WARMUP: ${AWSCS_WARMUP:-1}
       AWSCS_LOG_LEVEL: ${AWSCS_LOG_LEVEL:-INFO}
       # set to 1 once the backbones are in the models volume

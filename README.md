@@ -10,7 +10,7 @@ talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 
 Contents: [Layout](#layout) - [Quick start](#quick-start) - [API reference](#api-reference) -
 [Error codes](#error-codes) - [Configuration](#configuration) - [Clients](#clients) -
-[Deployment](#deployment) - [Load test](#load-test) - [Retraining the models](#retraining-the-models) -
+[Deployment](#deployment) - [Load test](#load-test) - [Known limits](#known-limits) - [Retraining the models](#retraining-the-models) -
 [Vision notes](#vision-notes) - [Protocol notes](#protocol-notes) - [Tests and CI](#tests-and-ci)
 
 ## Layout
@@ -84,7 +84,13 @@ with `ERROR_SERVICE_UNAVAILABLE` / `internal error`.
 ```
 
 Every POST body must be a JSON object with `clientKey`, at most `AWSCS_MAX_BODY_BYTES`
-(4 MB) long. There is no OpenAPI / docs page.
+(4 MB) long. `/docs`, `/redoc` and `/openapi.json` are disabled; this section is the
+reference.
+
+Targets are checked against an SSRF guard that is on by default: a `websiteURL` (or WAF
+endpoint) that resolves to a private, loopback or reserved address is rejected with
+`ERROR_INVALID_TASK_DATA`. Set `AWSCS_ALLOW_PRIVATE=1` to allow such targets (testing
+against a local WAF setup, for example).
 
 ### POST /createTask - AntiAwsWafTask / AntiAwsWafTaskProxyLess (asynchronous)
 
@@ -141,6 +147,12 @@ Solved:
  "solution": {"cookie": "<aws-waf-token>", "userAgent": "Mozilla/5.0 ...",
               "captchaVoucher": "<only when a CAPTCHA was solved>"}}
 ```
+Voucher-only outcome: when a CAPTCHA was solved but there is no token host to redeem the
+voucher at (for example a jsapi widget page without `challenge.js`), the task is still
+`ready`, with `"cookie": ""` and the `captchaVoucher`. Hand the voucher to the page the way
+the widget would (its `renderCaptcha` callback / the site's own form) instead of setting a
+cookie. Always check `cookie` before using it.
+
 Failed (the task's error code; see [Error codes](#error-codes)):
 ```json
 {"errorId": 1, "errorCode": "ERROR_CAPTCHA_UNSOLVABLE", "errorDescription": "...",
@@ -316,9 +328,12 @@ Resources: plan for about 3 GB RAM per instance (2.8 GB RSS was measured with th
 backbones loaded after the load test below); the audio model adds to that when used.
 Classification is CPU-bound and effectively serialised per process (see [Load test](#load-test)),
 so throughput scales with faster CPUs or more instances, not with `AWSCS_WORKERS`.
-Run one server process per instance: the task registry is in memory, so with several
-instances behind a load balancer `getTaskResult` must reach the instance that created the
-task (sticky routing per client, or one instance per client group).
+Run exactly ONE server process per instance and scale WAF-task concurrency with
+`AWSCS_WORKERS`. Never start uvicorn with `--workers N` (or several processes on one port):
+the task registry is in memory, so `getTaskResult` would land on a process that does not
+know the task. The Dockerfile, compose file and systemd unit all start a single process. If
+you run several instances behind a load balancer, `getTaskResult` must reach the instance
+that created the task (sticky routing per client, or one instance per client group).
 
 ### Docker / Compose
 
@@ -390,6 +405,22 @@ queue. Once the queue wait exceeds `AWSCS_CLASSIFY_TIMEOUT` (60 s) requests fail
 down the rest. Keep concurrent classification clients per instance at about
 `AWSCS_CLASSIFY_TIMEOUT / single-request latency` (for example at most 8-10 here), or
 add instances. Re-measure on the production host with `tools/loadtest.py`.
+
+## Known limits
+
+- The SSRF guard resolves the host before the request is made, and `requests` resolves it
+  again when connecting. A hostile DNS server can answer a public address to the check
+  and a private one to the connection (DNS rebinding). If that matters, run the service
+  where it cannot reach internal networks (firewall egress, separate network namespace,
+  or always solve through a proxy).
+- Timed-out classifications are abandoned, not killed: the client gets
+  `ERROR_TASK_TIMEOUT`, but the model call keeps running to completion in its thread and
+  still uses CPU. Sustained overload therefore makes later requests slower (see
+  [Load test](#load-test)). The same applies to a WAF task that passes
+  `AWSCS_TASK_TIMEOUT`; it stops at its next deadline check.
+- Tasks live in memory: a restart forgets every pending and finished task.
+- `toycarcity` problems are not supported (no samples observed).
+- No TLS, rate limiting or billing; `balance` is a static number.
 
 ## Retraining the models
 
