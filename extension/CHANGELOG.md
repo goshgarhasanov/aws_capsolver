@@ -24,6 +24,9 @@ All notable changes to the Captchosa browser extension. Versions follow
   least-overlapping spot as a last resort.
 - The pill can be dragged anywhere (it then keeps that offset from the captcha) and has an ×
   that hides it for that captcha; solving goes on.
+- Each captcha type in the popup / options list has its own icon (AWS grid, AWS token, BLS
+  grid, BLS Poland digits, general text).
+- The balance is shown as **tokens** (the service now bills tokens per solve).
 
 ### Tests
 - New end-to-end pages: label-only, canvas, shadow DOM + Turkish wording, a negative login page,

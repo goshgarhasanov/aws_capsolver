@@ -82,6 +82,37 @@ function makeSwitch(id, checked, label, onChange) {
 
 // ------------------------------------------------------------ render
 
+// One small icon per captcha type (constant inline SVG, 20x20, currentColor).
+const KIND_ICONS = {
+  // AWS WAF picture grid: 3x3 tiles, two of them picked
+  awsGrid: '<rect x="2" y="2" width="4.5" height="4.5" rx="1"/><rect x="7.75" y="2" width="4.5" height="4.5" rx="1" class="pick"/>' +
+    '<rect x="13.5" y="2" width="4.5" height="4.5" rx="1"/><rect x="2" y="7.75" width="4.5" height="4.5" rx="1"/>' +
+    '<rect x="7.75" y="7.75" width="4.5" height="4.5" rx="1"/><rect x="13.5" y="7.75" width="4.5" height="4.5" rx="1" class="pick"/>' +
+    '<rect x="2" y="13.5" width="4.5" height="4.5" rx="1"/><rect x="7.75" y="13.5" width="4.5" height="4.5" rx="1"/>' +
+    '<rect x="13.5" y="13.5" width="4.5" height="4.5" rx="1"/>',
+  // AWS WAF token: a key
+  awsToken: '<circle cx="6.5" cy="10" r="3.6" fill="none" stroke="currentColor" stroke-width="2"/>' +
+    '<path d="M10 10h8M15 10v3.2M17.6 10v2.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  // BLS number grid: tiles with a number
+  blsGrid: '<rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5" class="pick"/>' +
+    '<rect x="2" y="11" width="7" height="7" rx="1.5" class="pick"/><rect x="11" y="11" width="7" height="7" rx="1.5"/>' +
+    '<text x="14.5" y="7.6" class="glyph">7</text><text x="5.5" y="16.6" class="glyph">7</text>',
+  // BLS Poland: digits on a wavy line
+  blsText: '<path d="M1.5 14c3-4 5 3 8.5-1s5.5 2 8.5-1" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".55"/>' +
+    '<text x="10" y="11.5" class="glyph wide">123</text>',
+  // general text captcha: "Aa" on a picture frame
+  text: '<rect x="1.5" y="3.5" width="17" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+    '<text x="10" y="13.6" class="glyph wide">Aa</text>',
+};
+
+function kindIcon(kind) {
+  const span = el("span", `kind-icon kind-${kind}`);
+  span.setAttribute("aria-hidden", "true");
+  // constant markup from KIND_ICONS only (no page or user data)
+  span.innerHTML = `<svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">${KIND_ICONS[kind] || ""}</svg>`;
+  return span;
+}
+
 function renderSolvers() {
   const box = $("solvers");
   if (!box) return;
@@ -111,7 +142,7 @@ function renderSolvers() {
     const bad = el("span", `chip err${st.failed ? "" : " zero"}`, `✕ ${num(st.failed)}`);
     bad.title = `${num(st.failed)} ${t("failedCount")}`;
     counts.append(ok, bad);
-    row.append(info, counts, makeSwitch(`solver-${kind}`, on, t(`kind_${kind}`),
+    row.append(kindIcon(kind), info, counts, makeSwitch(`solver-${kind}`, on, t(`kind_${kind}`),
       (v) => persist({ solvers: Object.assign({}, settings.solvers, { [kind]: v }) })));
     box.append(row);
   }
