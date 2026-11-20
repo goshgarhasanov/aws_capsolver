@@ -58,6 +58,9 @@
 
   // The N grid cells: a group of N visible, similar, roughly square siblings.
   function findTiles(count) {
+    // The real widget: N <button class="amzn-grid-cell"> laid over one <canvas>.
+    const cells = CS.deepQueryAll(".amzn-grid-cell").filter((el) => CS.isVisible(el));
+    if (cells.length === count) return { tiles: cells, canvas: null };
     let best = null;
     for (const root of widgetRoots()) {
       const scope = root.shadowRoot || root;
@@ -66,12 +69,13 @@
         if (!CS.isVisible(el)) continue;
         const r = el.getBoundingClientRect();
         if (r.width < 24 || r.height < 24 || r.width / r.height > 1.6 || r.height / r.width > 1.6) continue;
-        const parent = el.parentNode;
-        if (!groups.has(parent)) groups.set(parent, []);
-        groups.get(parent).push(el);
+        // group siblings of the same kind: a canvas next to the cells must not hide them
+        let byTag = groups.get(el.parentNode);
+        if (!byTag) groups.set(el.parentNode, (byTag = new Map()));
+        if (!byTag.has(el.tagName)) byTag.set(el.tagName, []);
+        byTag.get(el.tagName).push(el);
       }
-      for (const els of groups.values()) {
-        const same = els.filter((e) => e.tagName === els[0].tagName);
+      for (const same of [...groups.values()].flatMap((m) => [...m.values()])) {
         if (same.length !== count) continue;
         const widths = same.map((e) => e.getBoundingClientRect().width);
         if (Math.max(...widths) / Math.min(...widths) > 1.3) continue;
@@ -94,6 +98,8 @@
   }
 
   function findConfirm(tiles) {
+    const own = CS.deepQueryAll("#amzn-captcha-verify-button").find((el) => CS.isVisible(el));
+    if (own) return own;
     let best = null;
     const roots = widgetRoots();
     for (const root of roots) {
@@ -260,6 +266,35 @@
     }
   }
 
+  // ------------------------------------------------------------ "Begin" screen
+
+  // Before the first puzzle the real widget only shows a Begin button (same id as the
+  // later Submit button) and no grid. Press it once per page when auto-solve is on.
+  let beginPressed = false;
+
+  function beginButton() {
+    if (state.problem || CS.deepQueryAll(".amzn-grid-cell").length) return null;
+    const btn = CS.deepQueryAll("#amzn-captcha-verify-button").find((el) => CS.isVisible(el) && !el.disabled);
+    return btn || null;
+  }
+
+  async function pressBegin() {
+    const s = CS.settings;
+    if (beginPressed || !s.enabled || !s.solvers.awsGrid || !s.autoSolve) return;
+    const btn = beginButton();
+    if (!btn) return;
+    beginPressed = true;
+    await CS.sleep(s.delayMs);
+    const again = beginButton();
+    if (again) await CS.humanClick(again);
+  }
+
+  function hasCaptchaWidget() {
+    return !!(document.getElementById("captcha-container") ||
+      CS.deepQueryAll("#amzn-captcha-verify-button, .amzn-captcha-modal, awswaf-captcha").length ||
+      [...document.scripts].some((sc) => /\/(captcha|jsapi)\.js(\?|$)/.test(sc.src || "")));
+  }
+
   // ------------------------------------------------------------ challenge token
 
   const TOKEN_GUARD = "captchosa:awsTokenTries";
@@ -270,6 +305,10 @@
     await CS.loadSettings();
     const s = CS.settings;
     if (!s.enabled || !s.solvers.awsToken || !s.autoSolve) return;
+    if (document.readyState === "loading") {
+      await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
+    }
+    if (hasCaptchaWidget()) return; // CAPTCHA action: the grid solver handles it in the page
     let tries = 0;
     try { tries = Number(sessionStorage.getItem(TOKEN_GUARD)) || 0; } catch (_) { /* storage blocked */ }
     if (tries >= s.retries) return; // never loop reloads
@@ -324,8 +363,18 @@
   CS.onSettings((s) => {
     if (state.badge) state.badge.applySettings();
     if (state.problem && !solving) maybeAuto(state.generation);
+    if (!state.problem) pressBegin();
     if (!s.enabled && state.badge) state.badge.set("idle", "Captchosa is off", false);
   });
+
+  // the Begin screen appears after captcha.js renders; check for it a few times
+  let beginChecks = 0;
+  const beginTimer = setInterval(async () => {
+    if (++beginChecks > 60 || beginPressed || state.problem) { clearInterval(beginTimer); return; }
+    if (!beginButton()) return;
+    await CS.loadSettings();
+    pressBegin();
+  }, 500);
 
   // gokuProps may have been reported before this script listened
   const askGoku = () => window.postMessage({ source: "captchosa:isolated", type: "goku?" }, "*");

@@ -3,6 +3,25 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.1 – 2026-11-21
+
+### Fixed
+- **AWS WAF grid did not solve on the real widget.** The real widget lays its 9
+  `button.amzn-grid-cell` cells over a `<canvas>` in the same parent; the cell finder grouped
+  siblings by the first child's tag (the canvas), fell back to clicking the canvas and the
+  widget submitted an empty answer. Cells are now found by `.amzn-grid-cell` first and
+  siblings are grouped per tag.
+- **No automatic start.** The widget fetches no puzzle until **Begin** is pressed; with
+  auto-solve on, the extension now presses it (after the configured delay).
+- On CAPTCHA pages the token flow no longer runs first and blocks the in-page grid solve; it is
+  kept for challenge-only pages.
+- The confirm step prefers the widget's own `#amzn-captcha-verify-button`.
+
+### Tests
+- `test/real_widget.py`: AWS's own `captcha.js` (local copy, not committed) served on
+  127.0.0.1 with a mocked `/problem` + `/verify`; the extension must press Begin, pick the
+  tiles and submit unaided.
+
 ## 1.0.0 – 2026-11-20
 
 First release.
