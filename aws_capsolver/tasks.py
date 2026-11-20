@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import io
 import hmac
 import logging
 import threading
@@ -15,7 +16,7 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import bls_bridge, text, vision_bridge
+from . import bls_bridge, geetest_bridge, text, vision_bridge
 from .billing import BillingError, InsufficientTokens
 from .config import Settings, UsageStore
 from .waf.errors import (ALL_CODES, ERROR_CAPTCHA_UNSOLVABLE, ERROR_INVALID_TASK_DATA,
@@ -32,10 +33,11 @@ TASK_WAF_PROXYLESS = "AntiAwsWafTaskProxyLess"
 TASK_CLASSIFY = "AwsWafClassification"
 TASK_BLS = "BlsClassification"
 TASK_TEXT = "ImageToTextTask"
+TASK_GEETEST = "GeeTestClassification"
 # synchronous task types: answered in the createTask reply, run on the bounded
 # classification executor (shared runners, queue and admission control)
-CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS, TASK_TEXT)
-SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS, TASK_TEXT)
+CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST)
+SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST)
 BLS_GRID_TILES = 9
 MAX_IMAGES = 16
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -284,12 +286,164 @@ def run_text(job: TextJob) -> Dict[str, Any]:
     return {"text": answer, "confidence": round(confidence, 4)}
 
 
+# ---------------------------------------------------------------------- GeeTest
+
+GEETEST_FAMILIES = ("slide", "icon", "word", "space", "nine", "gobang")
+GEETEST_MAX_HINTS = 8
+GEETEST_MAX_HINT_TEXT = 64
+GEETEST_MAX_TARGET = 64
+GEETEST_MAX_SIDE = 2000          # px; GeeTest pictures are a few hundred pixels wide
+NINE_CELLS = 9
+
+
+@dataclass(frozen=True)
+class GeeTestJob:
+    """A validated GeeTestClassification; `module` is the family (billing may price it)."""
+    module: str
+    image: bytes
+    piece: Optional[bytes] = None
+    full_background: Optional[bytes] = None
+    hints: Tuple[Any, ...] = ()
+    target: Any = None           # nine: str (a word) or bytes (a picture)
+
+
+def _geetest_question(task: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    question = _opt_str(task, "question", 16 + GEETEST_MAX_TARGET)
+    if not question:
+        raise SolverError(ERROR_INVALID_TASK_DATA, "question is required (geetest:<family>)")
+    parts = question.split(":", 2)
+    if len(parts) < 2 or parts[0] != "geetest":
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          "question must look like geetest:slide, geetest:icon, geetest:word, "
+                          "geetest:space, geetest:nine:<target> or geetest:gobang")
+    family = parts[1]
+    if family not in GEETEST_FAMILIES:
+        raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"GeeTest family {family!r} is not supported")
+    target = parts[2].strip() if len(parts) == 3 else None
+    if target and family != "nine":
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"geetest:{family} takes no target")
+    return family, target or None
+
+
+def _geetest_hints(task: Dict[str, Any], family: str) -> Tuple[Any, ...]:
+    hints = task.get("hints")
+    if hints is None or hints == []:
+        return ()
+    if family not in ("icon", "word", "space"):
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"geetest:{family} takes no hints")
+    if not isinstance(hints, list) or len(hints) > GEETEST_MAX_HINTS:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          f"hints must be a list of at most {GEETEST_MAX_HINTS} items")
+    if family == "icon":  # the small icons to click, in order (pictures)
+        return tuple(_decode_image(h, f"hints[{i}]") for i, h in enumerate(hints))
+    out = []
+    for i, h in enumerate(hints):  # word / space: the characters or the question text
+        if not isinstance(h, str) or not h.strip() or len(h) > GEETEST_MAX_HINT_TEXT:
+            raise SolverError(ERROR_INVALID_TASK_DATA,
+                              f"hints[{i}] must be a non-empty string of at most "
+                              f"{GEETEST_MAX_HINT_TEXT} characters")
+        if any(ord(c) < 32 or ord(c) == 127 for c in h):
+            raise SolverError(ERROR_INVALID_TASK_DATA, f"hints[{i}] contains control characters")
+        out.append(h.strip())
+    return tuple(out)
+
+
+def parse_geetest(task: Dict[str, Any]) -> GeeTestJob:
+    """
+    Validate a GeeTestClassification payload:
+    {question: geetest:<family>[:<target>], images: [one base64 picture], piece?,
+     fullBackground?, hints?, targetImage?}.
+    """
+    family, target = _geetest_question(task)
+    images = task.get("images")
+    if not isinstance(images, list) or len(images) != 1:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          "images[] must hold exactly one picture (the challenge image)")
+    image = _decode_image(images[0], "images[0]")
+    piece = full = None
+    for name in ("piece", "fullBackground"):
+        if task.get(name) not in (None, "") and family != "slide":
+            raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} is only for geetest:slide")
+    if family == "slide":
+        if task.get("piece") not in (None, ""):
+            piece = _decode_image(task.get("piece"), "piece")
+        if task.get("fullBackground") not in (None, ""):
+            full = _decode_image(task.get("fullBackground"), "fullBackground")
+    hints = _geetest_hints(task, family)
+    target_image = task.get("targetImage")
+    if target_image not in (None, ""):
+        if family != "nine":
+            raise SolverError(ERROR_INVALID_TASK_DATA, "targetImage is only for geetest:nine")
+        if target:
+            raise SolverError(ERROR_INVALID_TASK_DATA, "give the nine target as text or as targetImage, not both")
+        target = _decode_image(target_image, "targetImage")
+    if family == "nine" and not target:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          "geetest:nine needs a target (geetest:nine:<word> or targetImage)")
+    return GeeTestJob(module=family, image=image, piece=piece, full_background=full,
+                      hints=hints, target=target)
+
+
+def _image_size(data: bytes, name: str) -> Tuple[int, int]:
+    """Width/height from the image header (no full decode)."""
+    from PIL import Image, UnidentifiedImageError
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} is not a readable image") from exc
+    if not (1 <= width <= GEETEST_MAX_SIDE and 1 <= height <= GEETEST_MAX_SIDE):
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          f"{name} must be at most {GEETEST_MAX_SIDE} px per side")
+    return width, height
+
+
+def run_geetest(job: GeeTestJob) -> Dict[str, Any]:
+    """The model call for a validated GeeTestClassification."""
+    width, height = _image_size(job.image, "images[0]")
+    for data, name in ((job.piece, "piece"), (job.full_background, "fullBackground")):
+        if data is not None:
+            _image_size(data, name)
+    try:
+        if job.module == "slide":
+            x = geetest_bridge.slide_offset(job.image, job.piece, job.full_background)
+            if not 0 <= x <= width:
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"model returned x={x} outside the image")
+            return {"x": x}
+        if job.module in geetest_bridge.CLICK_KINDS:
+            points = geetest_bridge.click_points(job.image, job.module, list(job.hints) or None)
+            if not points:
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "model found nothing to click")
+            if any(not (0 <= x <= width and 0 <= y <= height) for x, y in points):
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "model returned a point outside the image")
+            return {"points": [[x, y] for x, y in points]}
+        if job.module == "nine":
+            cells = sorted(set(geetest_bridge.nine_grid(job.image, job.target)))
+            if not cells or any(not 0 <= i < NINE_CELLS for i in cells):
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"model returned cells {cells}")
+            return {"objects": cells}
+        if job.module == "gobang":
+            src, dst = geetest_bridge.gobang(job.image)
+            if src == dst:
+                raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "model returned an empty move")
+            return {"move": [list(src), list(dst)]}
+    except geetest_bridge.GeeTestInvalidInput as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, str(exc)) from exc
+    except geetest_bridge.GeeTestUnavailable as exc:
+        raise SolverError(ERROR_TASK_NOT_SUPPORTED, str(exc)) from exc
+    except geetest_bridge.GeeTestUnsolvable as exc:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, str(exc)) from exc
+    raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"GeeTest family {job.module!r} is not supported")
+
+
 def parse_sync_job(task: Dict[str, Any], default_text_module: str = text.DEFAULT_MODULE
                    ) -> Tuple[str, Callable[[], Dict[str, Any]]]:
     """Validate any synchronous task -> (task type, zero-argument call producing the solution)."""
     task_type = task.get("type")
     if task_type == TASK_TEXT:
         return TASK_TEXT, partial(run_text, parse_text(task, default_text_module))
+    if task_type == TASK_GEETEST:
+        return TASK_GEETEST, partial(run_geetest, parse_geetest(task))
     job = parse_classification(task)
     return (TASK_BLS if task_type == TASK_BLS else TASK_CLASSIFY), partial(run_classification,
                                                                          *job)

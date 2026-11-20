@@ -32,6 +32,7 @@ DEFAULT_PRICES: Dict[str, int] = {
     "AntiAwsWafTaskProxyLess": 30,
     "AwsWafClassification": 10,
     "BlsClassification": 5,
+    "GeeTestClassification": 8,
     "ImageToTextTask": 2,
 }
 DEFAULT_TOKENS_PER_USD = 1000
