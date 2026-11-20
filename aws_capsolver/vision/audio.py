@@ -89,8 +89,9 @@ WINDOW_S = float(os.environ.get("AWS_CAPSOLVER_AUDIO_WINDOW", "20"))  # encoder 
 MAX_SEGMENTS = 4
 MULTI_WORD_PENALTY = 0.7  # a run decoded as several words has background speech in it
 TOKEN_PENALTY = 0.3       # per extra BPE token: common words are 1-2 tokens (tuned on dev)
-STEM_MARGIN = float(os.environ.get("AWS_CAPSOLVER_AUDIO_STEM_MARGIN", "0.0"))
-SECOND_MODEL = os.environ.get("AWS_CAPSOLVER_AUDIO_SECOND_MODEL", "")
+STEM_MARGIN = float(os.environ.get("AWS_CAPSOLVER_AUDIO_STEM_MARGIN", "0.5"))  # tuned on dev
+USE_ALTERNATIVES = False  # second opinion may also confirm a non-top beam of the primary
+SECOND_MODEL = os.environ.get("AWS_CAPSOLVER_AUDIO_SECOND_MODEL", "small.en")  # "" = off
 SECOND_WINDOW_S = 10.0
 SIL_S = 0.4
 
@@ -569,19 +570,43 @@ def prefer_stem(cand: Candidate, is_common, margin: float = None) -> Candidate:
     return cand
 
 
+_FUNCTION_WORDS = frozenset("a an the and of to one".split())
+
+
+def _core(text: str) -> str:
+    """'a thousand' -> 'thousand': drop leading function words that leaked into a run."""
+    words = text.split()
+    while len(words) > 1 and words[0] in _FUNCTION_WORDS:
+        words = words[1:]
+    return " ".join(words)
+
+
 def choose_answer(cands: Sequence[Candidate],
-                  others: Optional[Sequence[Candidate]] = None) -> str:
+                  others: Optional[Sequence[Candidate]] = None,
+                  use_alternatives: bool = None) -> str:
     """Pick the one word to submit.
 
     ``others`` are the same runs decoded by a second model (index-aligned with ``cands``,
-    empty texts included). A single word both models agree on wins; otherwise the most
-    confident single-word run of the primary model.
+    empty texts included). A single word both models agree on wins (optionally also when
+    the second model matches one of the primary's other beam hypotheses); otherwise the
+    most confident single-word run of the primary model.
     """
+    use_alternatives = USE_ALTERNATIVES if use_alternatives is None else use_alternatives
     if others is not None:
-        agreed = [c for c, o in zip(cands, others)
-                  if c.text and c.text == o.text and len(c.text.split()) == 1]
+        agreed = []
+        for c, o in zip(cands, others):
+            other = _core(o.text)
+            if not other or len(other.split()) != 1:
+                continue
+            if _core(c.text) == other:
+                agreed.append((c.score, other))
+            elif use_alternatives:
+                for text, logprob in c.alternatives:
+                    if _core(text) == other:
+                        agreed.append((logprob - 0.5 * c.no_speech - 0.5, other))
+                        break
         if agreed:
-            return max(agreed, key=lambda c: c.score).text
+            return max(agreed)[1]
     cands = [c for c in cands if c.text]
     if not cands:
         return ""

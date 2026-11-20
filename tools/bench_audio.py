@@ -297,7 +297,7 @@ def cmd_simulate(args) -> None:
                 c.n_tokens = ntok(c.text)
             cands = [A.prefer_stem(c, common, margin) for c in cands]
             others = _cands(sec[cid]["segments"], alts=False) if sec is not None else None
-            answer = A.choose_answer(cands, others)
+            answer = A.choose_answer(cands, others, args.alternatives)
             n += 1
             ok += answer in v["words"]
             if answer not in v["words"]:
@@ -359,6 +359,7 @@ def main() -> None:
     p.add_argument("--split", choices=["dev", "test"], default="dev")
     p.add_argument("--margins", type=float, nargs="+", default=[0.0])
     p.add_argument("--tokenizer-model", default="medium.en")
+    p.add_argument("--alternatives", action="store_true")
     p.add_argument("-v", "--verbose", action="store_true")
     p = sub.add_parser("show")
     p.add_argument("clip")

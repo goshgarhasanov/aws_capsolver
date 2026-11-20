@@ -210,6 +210,7 @@ def test_singleton_loads_once_under_concurrency(monkeypatch):
 
     monkeypatch.setattr(A, "AudioSolver", Dummy)
     monkeypatch.setattr(A, "_solver", None)
+    monkeypatch.setattr(A, "SECOND_MODEL", "small.en")
     results = []
     threads = [threading.Thread(target=lambda: results.append(A.get_solver()))
                for _ in range(16)]
@@ -217,7 +218,9 @@ def test_singleton_loads_once_under_concurrency(monkeypatch):
         t.start()
     for t in threads:
         t.join(10)
-    assert len(created) == 1 and all(r is created[0] for r in results)
+    # one primary + one second-opinion model, created exactly once
+    assert len(created) == 2 and all(r is created[0] for r in results)
+    assert created[0].second is created[1]
 
 
 def test_model_load_failure_is_unsupported_and_retried(monkeypatch):
@@ -291,3 +294,26 @@ def test_collapse_repeats(raw, expected):
                                      (2026, "two thousand twenty six")])
 def test_number_to_words(n, words):
     assert A.number_to_words(n) == words
+
+
+def _cand(text, logprob=-0.3, alts=()):
+    return A.Candidate(text, logprob, 0.0, None, 1, list(alts))
+
+
+def test_choose_answer_prefers_word_both_models_agree_on():
+    primary = [_cand("whismations", -0.2), _cand("thousand", -0.8)]
+    second = [_cand("with specials"), _cand("a thousand")]
+    assert A.choose_answer(primary, second) == "thousand"
+    # no agreement: fall back to the primary's most confident single word
+    assert A.choose_answer(primary, [_cand("x y"), _cand("")]) == "whismations"
+    assert A.choose_answer([], []) == ""
+
+
+def test_prefer_stem_uses_beam_alternative_for_common_stem():
+    common = {"feeling", "notion"}.__contains__
+    c = _cand("feelings", -0.30, [("feeling", -0.50)])
+    assert A.prefer_stem(c, common, 0.5).text == "feeling"
+    assert A.prefer_stem(c, common, 0.1).text == "feelings"        # outside the margin
+    assert A.prefer_stem(c, lambda w: False, 0.5).text == "feelings"  # not a common word
+    assert A.prefer_stem(_cand("status", alts=[("statu", -0.1)]), lambda w: True,
+                         1.0).text == "status"                      # -us is not a plural
