@@ -297,6 +297,21 @@ function bind() {
     e.preventDefault(); // inside <summary>: do not toggle
     chrome.storage.local.set({ log: [] });
   });
+  const ALL_SITES = { origins: ["<all_urls>"] };
+  const markAllowed = (yes) => {
+    const b = $("allowAll");
+    if (!b) return;
+    b.disabled = yes;
+    b.textContent = t(yes ? "allowAllSitesDone" : "allowAllSites");
+  };
+  if ($("allowAll")) chrome.permissions.contains(ALL_SITES).then(markAllowed, () => markAllowed(false));
+  on("allowAll", "click", () => {
+    // must run synchronously inside the click (user gesture)
+    chrome.permissions.request(ALL_SITES).then((granted) => {
+      markAllowed(granted);
+      if (!granted) showMessage(t("allowAllSitesHint"), "err");
+    }, (err) => showMessage(String(err && err.message || err), "err"));
+  });
   on("resetStats", "click", async () => {
     await chrome.storage.local.set({ stats: {} });
     showMessage(t("statsReset"), "ok");

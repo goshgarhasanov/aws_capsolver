@@ -154,6 +154,43 @@ def generic_page(img):
 </form></body></html>"""
 
 
+GENERIC_VARIANTS = {
+    # a label describes the input; the picture has no captcha-like attributes at all
+    "label": """<form method="post" action="/blspl/submit">
+  <p><img src="/blspl/captcha.jpg?img={img}" id="pic" width="200" height="60"></p>
+  <label for="ans">Enter the characters shown in the picture</label>
+  <input type="text" name="answer" id="ans"> <button type="submit">Send</button></form>""",
+    # the captcha is drawn on a canvas, the input is described by its placeholder only
+    "canvas": """<form method="post" action="/blspl/submit">
+  <canvas id="cv" width="200" height="60"></canvas><br>
+  <input type="text" name="f2" id="sec" placeholder="Security code"> <button type="submit">Send</button></form>
+<script>const im = new Image(); im.onload = () => document.getElementById('cv').getContext('2d').drawImage(im, 0, 0, 200, 60);
+im.src = '/blspl/captcha.jpg?img={img}';</script>""",
+    # everything inside an open shadow root, Turkish wording
+    "shadow": """<div id="host"></div><script>
+const root = document.getElementById('host').attachShadow({{mode: 'open'}});
+root.innerHTML = '<p>Resimdeki kodu giriniz</p><img id="simg" src="/blspl/captcha.jpg?img={img}">' +
+  '<input type="text" id="kod" name="guvenlik">';
+</script>""",
+    # a normal login form with a logo: nothing must be filled
+    "negative": """<form method="post" action="/blspl/submit">
+  <img src="/static/logo.jpg?img={img}" id="logo" width="200" height="60" alt="Acme">
+  <input type="text" name="username" id="user" placeholder="User name">
+  <input type="password" name="password" id="pw">
+  <input type="text" name="q" id="search" placeholder="Search"> <button type="submit">Log in</button></form>""",
+    # the picture comes from another origin (localhost vs 127.0.0.1): read from a screenshot
+    "cross": """<form method="post" action="/blspl/submit">
+  <img src="http://localhost:{port}/blspl/captcha.jpg?img={img}" id="xpic" alt="captcha">
+  <input type="text" name="captcha_text" id="xin"> <button type="submit">Send</button></form>""",
+}
+
+
+def generic_variant_page(variant, img, port):
+    body = GENERIC_VARIANTS[variant].format(img=html.escape(img), port=port)
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>generic {variant}</title></head>
+<body style="font-family:sans-serif;margin:20px"><h1>Generic text captcha: {variant}</h1>{body}</body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "fixture/1"
 
@@ -203,6 +240,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, blspl_page(q.get("img", "cap-4ot0qvfu3q5.jpg")))
         if path == "/generic/login":
             return self._send(200, generic_page(q.get("img", "cap-br7bzbh49g8.jpg")))
+        if path == "/generic/v" and q.get("variant") in GENERIC_VARIANTS:
+            return self._send(200, generic_variant_page(q["variant"], q.get("img", "cap-br7bzbh49g8.jpg"),
+                                                        self.server.server_address[1]))
+        if path == "/static/logo.jpg":
+            return self._send(200, (BLS_PL / Path(q.get("img", "cap-br7bzbh49g8.jpg")).name).read_bytes(),
+                              "image/jpeg")
         if path == "/blspl/captcha.jpg":
             name = Path(q.get("img", "")).name
             with LOCK:

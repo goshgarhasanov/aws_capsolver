@@ -64,6 +64,8 @@
   }
 
   const solve = (kind, task) => send({ type: "solve", kind, task });
+  // Screenshot crop of a page rectangle (CSS px of the top frame) -> {ok, body: base64 PNG}
+  const capture = (rect) => send({ type: "capture", rect }, 15000);
   const outcome = (kind, ok, detail, ms) => send({ type: "outcome", kind, ok, detail, ms }, 10000);
 
   // ---- DOM helpers
@@ -281,7 +283,7 @@
 
   globalThis.CS = {
     get settings() { return settings; },
-    loadSettings, onSettings, sleep, waitFor, solve, outcome,
+    loadSettings, onSettings, sleep, waitFor, solve, outcome, capture,
     badgeState: (state, title) => send({ type: "badge", state, title }, 5000),
     deepQueryAll, isVisible, hitTest, humanClick, setInputValue, Badge, imageToBase64, blobToBase64,
   };

@@ -45,7 +45,19 @@
     "message": "BLS Polşa girişindəki 5 rəqəm"
   },
   "desc_text": {
-    "message": "Captcha sahəsinin yanındakı şəkil"
+    "message": "İstənilən saytda şəkilli mətn captcha (avtomatik tapılır)"
+  },
+  "solvingPlaceholder": {
+    "message": "Həll olunur…"
+  },
+  "allowAllSites": {
+    "message": "Bütün saytlarda icazə ver"
+  },
+  "allowAllSitesHint": {
+    "message": "Başqa domendən gələn captcha şəkilləri üçün lazımdır: Captchosa onları görünən tabın ekran görüntüsündən oxuyur."
+  },
+  "allowAllSitesDone": {
+    "message": "Bütün saytlarda icazəlidir"
   },
   "solvedCount": {
     "message": "həll"

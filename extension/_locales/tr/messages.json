@@ -45,7 +45,19 @@
     "message": "BLS Polonya girişindeki 5 rakam"
   },
   "desc_text": {
-    "message": "Captcha alanının yanındaki resim"
+    "message": "Her sitedeki resimli metin captcha (otomatik algılanır)"
+  },
+  "solvingPlaceholder": {
+    "message": "Çözülüyor…"
+  },
+  "allowAllSites": {
+    "message": "Tüm sitelerde izin ver"
+  },
+  "allowAllSitesHint": {
+    "message": "Başka bir alan adından gelen captcha resimleri için gerekli: Captchosa onları görünen sekmenin ekran görüntüsünden okur."
+  },
+  "allowAllSitesDone": {
+    "message": "Tüm sitelerde izinli"
   },
   "solvedCount": {
     "message": "çözüldü"

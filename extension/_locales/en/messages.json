@@ -45,7 +45,19 @@
     "message": "5 digits on the BLS Poland login"
   },
   "desc_text": {
-    "message": "Any image captcha next to a captcha field"
+    "message": "Any image text captcha on any site (detected automatically)"
+  },
+  "solvingPlaceholder": {
+    "message": "Solving…"
+  },
+  "allowAllSites": {
+    "message": "Allow on all sites"
+  },
+  "allowAllSitesHint": {
+    "message": "Needed for captcha pictures served from another domain: Captchosa then reads them from a screenshot of the visible tab."
+  },
+  "allowAllSitesDone": {
+    "message": "Allowed on all sites"
   },
   "solvedCount": {
     "message": "solved"

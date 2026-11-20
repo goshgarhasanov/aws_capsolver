@@ -45,7 +45,19 @@
     "message": "5 цифр при входе BLS Польша"
   },
   "desc_text": {
-    "message": "Любая картинка рядом с полем капчи"
+    "message": "Любая текстовая капча-картинка на любом сайте (находится автоматически)"
+  },
+  "solvingPlaceholder": {
+    "message": "Решается…"
+  },
+  "allowAllSites": {
+    "message": "Разрешить на всех сайтах"
+  },
+  "allowAllSitesHint": {
+    "message": "Нужно для картинок капчи с другого домена: Captchosa читает их со снимка видимой вкладки."
+  },
+  "allowAllSitesDone": {
+    "message": "Разрешено на всех сайтах"
   },
   "solvedCount": {
     "message": "решено"

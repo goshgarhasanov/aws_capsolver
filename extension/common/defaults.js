@@ -6,6 +6,10 @@
   const KINDS = ["awsGrid", "awsToken", "blsGrid", "blsText", "text"];
   const LANGS = ["auto", "en", "tr", "az", "ru"];
 
+  // v2: the general text solver is on by default (it used to be off, so captchas on most
+  // sites were never detected); stored v1 settings are migrated once.
+  const SETTINGS_VERSION = 2;
+
   const DEFAULTS = {
     enabled: true,
     serviceUrl: "http://127.0.0.1:8790",
@@ -13,7 +17,7 @@
     autoSolve: true,
     delayMs: 800,          // pause before solving a freshly detected captcha
     retries: 3,            // rounds per captcha (new puzzle after a wrong answer)
-    solvers: { awsGrid: true, awsToken: true, blsGrid: true, blsText: true, text: false },
+    solvers: { awsGrid: true, awsToken: true, blsGrid: true, blsText: true, text: true },
     blsGridSubmit: true,   // press Verify after picking BLS tiles (never with an empty password)
     submitAfterFill: false, // submit the form after filling a text captcha (auto-solve only)
     pageBadge: true,       // small status pill next to the captcha
@@ -30,6 +34,8 @@
   function normalize(raw) {
     const s = Object.assign({}, DEFAULTS, raw && typeof raw === "object" ? raw : {});
     s.solvers = Object.assign({}, DEFAULTS.solvers, (raw && raw.solvers) || {});
+    if (raw && typeof raw === "object" && !(Number(raw.v) >= SETTINGS_VERSION)) s.solvers.text = true;
+    s.v = SETTINGS_VERSION;
     for (const k of KINDS) s.solvers[k] = DEFAULTS.solvers[k] ? s.solvers[k] !== false : s.solvers[k] === true;
     s.enabled = s.enabled !== false;
     s.autoSolve = s.autoSolve !== false;

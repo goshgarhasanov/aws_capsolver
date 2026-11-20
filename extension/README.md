@@ -23,7 +23,7 @@ In manual mode a branded badge with a **Solve** button sits next to the captcha:
 | AWS WAF token | challenge pages with `window.gokuProps` + `challenge.js` | `AntiAwsWafTaskProxyLess` → `aws-waf-token` cookie |
 | BLS grid | `.box-label` + `img.captcha-img` (BLS Spain etc.) | `BlsClassification` (`bls:grid:NNN`, 9 tiles in page order) |
 | BLS Poland text | `img[src*=captcha]` + `input[name=captcha_code]` | `ImageToTextTask`, module `bls_poland` |
-| General text (off by default) | image next to a captcha/code input | `ImageToTextTask`, module `common` |
+| General text (on by default) | any picture (`img`, `canvas`, `input[type=image]`, captcha background image; also in open shadow roots) paired with a nearby captcha-like text input | `ImageToTextTask`, module `common` |
 
 How each one works:
 
@@ -36,9 +36,18 @@ How each one works:
 - **BLS grid** – only labels and tiles that are visible *and* win a centre hit-test count (BLS hides
   decoys with `display`, `visibility`, `opacity`, off-screen positions and stacking). Verify is
   pressed only when *Press Verify after BLS grid* is on and no password field is empty.
-- **Text captchas** – the image is read from the already loaded `<img>` through a canvas; it is
-  never requested again (that would change the captcha). The value is set with `input`/`change`
-  events. The form is submitted only with *Auto-solve* **and** *Submit after filling text*.
+- **Text captchas** – the general solver pairs a picture with a text input. An input counts when
+  its name/id/placeholder/aria-label, its `<label>` or the text around it talks about a captcha /
+  security / verification code (English, Turkish, Azerbaijani, Russian wording); a picture counts
+  when its attributes look like a captcha (`captcha`, `kaptcha`, `securimage`, `vcode`, `checkcode`,
+  `code.php`…) or, next to such an input, when it is wide and short. Usernames, passwords, e-mail,
+  search, phone, OTP and similar fields are never used. The picture is read from the page (an
+  `<img>` through a canvas, a `<canvas>` directly) and never requested again (that would change the
+  captcha). Cross-origin pictures cannot be read that way: they are cut out of a screenshot of the
+  visible tab, which needs **Options → Advanced → Allow on all sites** once (without it the pill
+  shows `CAPTURE_DENIED`). While solving, the input's placeholder reads *Solving…*; the answer is
+  then typed in with `input`/`change` events. The form is submitted only with *Auto-solve*
+  **and** *Submit after filling text*.
 
 ## Install
 

@@ -254,6 +254,45 @@ async function handleOutcome(msg, sender) {
   return {};
 }
 
+// Cut a rectangle out of a screenshot of the visible tab: used for captcha pictures the
+// page cannot hand over (cross-origin images / tainted canvases). Top frame only.
+async function handleCapture(msg, sender) {
+  const settings = await getSettings();
+  if (!settings.enabled) throw new SolveError("DISABLED", "Captchosa is off");
+  if (!sender.tab || sender.frameId !== 0) {
+    throw new SolveError("CAPTURE_FAILED", "only captchas in the top frame can be captured");
+  }
+  const r = msg.rect && typeof msg.rect === "object" ? msg.rect : {};
+  const x = Number(r.x); const y = Number(r.y); const w = Number(r.w); const h = Number(r.h);
+  const vw = Number(r.vw);
+  if (![x, y, w, h, vw].every(Number.isFinite) || w < 8 || h < 8 || w > 1600 || h > 900 || vw < 100) {
+    throw new SolveError("BAD_TASK", "bad capture rectangle");
+  }
+  const tab = await chrome.tabs.get(sender.tab.id);
+  if (!tab.active) throw new SolveError("CAPTURE_FAILED", "the tab is not in front");
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  } catch (err) {
+    throw new SolveError("CAPTURE_DENIED", "this captcha picture comes from another site; open the " +
+      "Captchosa options and press \"Allow on all sites\" so it can be read (" + ((err && err.message) || err) + ")");
+  }
+  const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const scale = bmp.width / vw; // device pixels per CSS pixel (DPR and zoom)
+  const sx = Math.max(0, Math.floor(x * scale));
+  const sy = Math.max(0, Math.floor(y * scale));
+  const sw = Math.min(bmp.width - sx, Math.ceil(w * scale));
+  const sh = Math.min(bmp.height - sy, Math.ceil(h * scale));
+  if (sw < 8 || sh < 8) throw new SolveError("CAPTURE_FAILED", "the captcha is not on screen");
+  const canvas = new OffscreenCanvas(sw, sh);
+  canvas.getContext("2d").drawImage(bmp, sx, sy, sw, sh, 0, 0, sw, sh);
+  bmp.close();
+  const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return { body: btoa(bin) };
+}
+
 async function handleTest() {
   const settings = await getSettings();
   const out = { serviceUrl: settings.serviceUrl };
@@ -287,6 +326,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   let work;
   if (msg.type === "solve") work = handleSolve(msg, sender);
   else if (msg.type === "outcome") work = handleOutcome(msg, sender);
+  else if (msg.type === "capture") work = handleCapture(msg, sender);
   else if (msg.type === "badge") work = tabBadge(sender.tab ? sender.tab.id : null, msg.state, msg.title);
   else if (msg.type === "test") work = handleTest();
   else return false;

@@ -10,6 +10,7 @@ captchosa service started here on 127.0.0.1. Run from the repository root:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -147,10 +148,19 @@ def run(args):
         if not wait_http(f"{SERVICE}/health", 60) or not wait_http(f"{FIX}/_log", 15):
             check("servers start", False, f"see {tmp}")
             return
+        ext_dir = EXT
+        if args.grant_all_urls:
+            # a copy whose manifest grants <all_urls> up front (stands in for the user's
+            # "Allow on all sites" click, which needs a browser prompt)
+            ext_dir = tmp / "ext"
+            shutil.copytree(EXT, ext_dir, ignore=shutil.ignore_patterns("dist", "test", "docs"))
+            man = json.loads((ext_dir / "manifest.json").read_text())
+            man["host_permissions"] = list(man.get("host_permissions", [])) + ["<all_urls>"]
+            (ext_dir / "manifest.json").write_text(json.dumps(man, indent=2))
         with sync_playwright() as pw:
             context = pw.chromium.launch_persistent_context(
                 str(tmp / "profile"), headless=not args.headed, channel="chromium",
-                args=[f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"],
+                args=[f"--disable-extensions-except={ext_dir}", f"--load-extension={ext_dir}"],
                 viewport={"width": 1100, "height": 900})
             try:
                 scenarios(context, args)
@@ -313,20 +323,59 @@ def scenarios(context, args):
     page.close()
     ext.settings(submitAfterFill=False)
 
-    # ---- General text solver: off by default, then switched on live (mocked service)
+    # ---- General text solver: on by default (mocked service), many page layouts
+    page = context.new_page()
+    page.goto(f"{FIX}/generic/login")
+    got = wait_until(lambda: page.input_value("#verification_code") == "40719", 60)
+    mock = fixture_log()["mockapi"][-1]
+    check("general text: on by default, solved (module common)", got and mock.get("module") == "common",
+          json.dumps(mock))
+    page.close()
+
+    def generic_variant(variant, selector, expect_fill=True):
+        page = context.new_page()
+        n_mock = len(fixture_log()["mockapi"])
+        page.goto(f"{FIX}/generic/v?variant={variant}")
+        read = (lambda: page.evaluate("document.getElementById('host').shadowRoot.getElementById('kod').value")) \
+            if variant == "shadow" else (lambda: page.input_value(selector))
+        if expect_fill:
+            got = wait_until(lambda: read() == "40719", 60)
+            check(f"general text [{variant}]: detected and filled", got, f"value={read()!r} badge={page_badge(page)}")
+        else:
+            time.sleep(5)
+            check(f"general text [{variant}]: nothing detected or filled",
+                  read() == "" and len(fixture_log()["mockapi"]) == n_mock and page_badge(page) is None,
+                  f"value={read()!r} badge={page_badge(page)}")
+        page.close()
+
+    for variant, selector in (("label", "#ans"), ("canvas", "#sec"), ("shadow", None)):
+        generic_variant(variant, selector)
+    generic_variant("negative", "#user", expect_fill=False)
+
+    # cross-origin picture: needs the <all_urls> grant (a browser prompt) for the screenshot path,
+    # so without it the pill must show a clear CAPTURE_DENIED; with it the field is filled
+    page = context.new_page()
+    page.goto(f"{FIX}/generic/v?variant=cross")
+    if args.grant_all_urls:
+        got = wait_until(lambda: page.input_value("#xin") == "40719", 60)
+        check("general text [cross]: read from a screenshot and filled", got,
+              f"value={page.input_value('#xin')!r} badge={page_badge(page)}")
+    else:
+        got = wait_until(lambda: "CAPTURE" in ((page_badge(page) or ["", ""])[1]), 60)
+        check("general text [cross]: detected, clear CAPTURE_DENIED without the grant", got,
+              f"value={page.input_value('#xin')!r} badge={page_badge(page)}")
+    page.close()
+
+    # switching the general solver off stops it live
+    ext.settings(solvers={"text": False})
     page = context.new_page()
     n_mock = len(fixture_log()["mockapi"])
     page.goto(f"{FIX}/generic/login")
-    time.sleep(3)
-    check("general text: off by default", page.input_value("#verification_code") == ""
+    time.sleep(4)
+    check("general text: off when switched off", page.input_value("#verification_code") == ""
           and len(fixture_log()["mockapi"]) == n_mock)
-    ext.settings(solvers={"text": True})
-    got = wait_until(lambda: page.input_value("#verification_code") == "40719", 60)
-    mock = fixture_log()["mockapi"][-1]
-    check("general text: solves after switching on (module common)", got and mock.get("module") == "common",
-          json.dumps(mock))
     page.close()
-    ext.settings(solvers={"text": False}, serviceUrl=SERVICE)
+    ext.settings(solvers={"text": True}, serviceUrl=SERVICE)
 
     # ---- BLS Poland text against the real service (model may be absent: then a typed error)
     page = context.new_page()
@@ -356,6 +405,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--grids", type=int, default=4)
+    ap.add_argument("--grant-all-urls", action="store_true",
+                    help="load a copy of the extension with <all_urls> granted (cross-origin captcha path)")
     args = ap.parse_args()
     run(args)
     failed = [r for r in results if not r[1]]

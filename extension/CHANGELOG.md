@@ -3,6 +3,26 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.2 – 2026-11-21
+
+### Fixed
+- **Text captchas were not detected on most sites.** The general text solver was off by default
+  (stored settings are migrated once to *on*), and both text solvers checked the BLS Poland switch
+  instead of their own.
+- Detection is much broader: `<canvas>` captchas, `input[type=image]`, captcha background images,
+  open shadow roots, inputs recognised by their `<label>` / surrounding text (en/tr/az/ru), and
+  pictures recognised by shape when they sit next to a captcha input. Ordinary login, search and
+  e-mail fields are excluded.
+- Cross-origin captcha pictures are read from a screenshot of the visible tab (new
+  **Allow on all sites** button in Options → Advanced).
+
+### Changed
+- The input shows *Solving…* (localised) while the answer is on its way.
+
+### Tests
+- New end-to-end pages: label-only, canvas, shadow DOM + Turkish wording, a negative login page,
+  a cross-origin picture (`run_e2e.py --grant-all-urls` covers the screenshot path).
+
 ## 1.0.1 – 2026-11-21
 
 ### Fixed
