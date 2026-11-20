@@ -47,6 +47,9 @@
   "desc_text": {
     "message": "İstənilən saytda şəkilli mətn captcha (avtomatik tapılır)"
   },
+  "closeBadge": {
+    "message": "Gizlət"
+  },
   "solvingPlaceholder": {
     "message": "Həll olunur…"
   },

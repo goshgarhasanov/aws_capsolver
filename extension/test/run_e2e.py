@@ -116,6 +116,19 @@ class Ext:
         }""", url_part)
 
 
+def badge_covers(frame, input_js):
+    """Area (px²) of the in-page pill that lies over the input found by ``input_js``."""
+    return frame.evaluate("""(inputJs) => {
+        const h = document.querySelector('captchosa-badge');
+        const inp = eval(inputJs);
+        if (!h || !h.shadowRoot || !inp) return -1;
+        const a = h.shadowRoot.querySelector('.pill').getBoundingClientRect();
+        const b = inp.getBoundingClientRect();
+        return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+               Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    }""", input_js)
+
+
 def page_badge(page):
     """(state class, message, solve button visible) of the in-page pill, searched in all frames."""
     for frame in page.frames:
@@ -125,7 +138,8 @@ def page_badge(page):
                 if (!h || !h.shadowRoot) return null;
                 const p = h.shadowRoot.querySelector('.pill');
                 const b = h.shadowRoot.querySelector('button');
-                return [p.className, h.shadowRoot.querySelector('.msg').textContent, !b.hidden];
+                const cls = p.className.split(' ').filter((c) => c !== 'compact' && c !== 'dragging').join(' ');
+                return [cls, h.shadowRoot.querySelector('.msg').textContent, !b.hidden];
             }""")
         except Exception:
             got = None
@@ -238,7 +252,7 @@ def scenarios(context, args):
     time.sleep(2)
     n_before = len(fixture_log()["verify"])
     check("manual mode: Solve button shown, nothing sent", badge and badge[2] and n_before == 3, repr(badge))
-    page.locator("captchosa-badge").locator("button").click()
+    page.locator("captchosa-badge").locator("button.solve").click()
     got = wait_until(lambda: len(fixture_log()["verify"]) > n_before, 90)
     v = (fixture_log()["verify"] or [{}])[-1]
     check("manual mode: Solve button solves", got and v["solution"] == [0, 2, 4, 6, 8] and v["accepted"], json.dumps(v))
@@ -343,6 +357,25 @@ def scenarios(context, args):
         if expect_fill:
             got = wait_until(lambda: read() == "aB3dE", 60)
             check(f"general text [{variant}]: detected and filled", got, f"value={read()!r} badge={page_badge(page)}")
+            if selector:
+                cov = badge_covers(page.main_frame, f"document.querySelector('{selector}')")
+                check(f"general text [{variant}]: pill does not cover the input", cov == 0, f"overlap={cov}")
+            if variant == "label":
+                pill_box = lambda: page.evaluate("""() => { const r = document.querySelector('captchosa-badge')
+                    .shadowRoot.querySelector('.pill').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }""")
+                x, y, w, h = pill_box()
+                page.mouse.move(x + 8, y + h / 2)
+                page.mouse.down()
+                page.mouse.move(x + 8 - 120, y + h / 2 + 40, steps=8)
+                page.mouse.up()
+                time.sleep(1.2)  # survives the periodic reposition
+                x2, y2, _, _ = pill_box()
+                check("badge: can be dragged (and stays there)", abs((x2 - x) + 120) <= 3 and abs((y2 - y) - 40) <= 3,
+                      f"{(x, y)} -> {(x2, y2)}")
+                page.evaluate("document.querySelector('captchosa-badge').shadowRoot.querySelector('button.close').click()")
+                time.sleep(1.2)
+                shown = page.evaluate("getComputedStyle(document.querySelector('captchosa-badge')).display")
+                check("badge: x hides it", shown == "none", shown)
         else:
             time.sleep(5)
             check(f"general text [{variant}]: nothing detected or filled",
@@ -389,6 +422,9 @@ def scenarios(context, args):
     page.goto(f"{FIX}/generic/nopecha_docwrite?n=8")
     got = wait_until(lambda: (lambda v: len(v) == 8 and all(x == "aB3dE" for x in v))(nopecha_filled()), 120)
     check("general text [nopecha document.write iframes]: every captcha filled", got, repr(nopecha_filled()))
+    covers = [badge_covers(fr, "document.querySelector('input.captcha')") for fr in page.frames[1:]]
+    check("general text [nopecha document.write iframes]: pill never covers the input",
+          all(c == 0 for c in covers), repr(covers))
     page.close()
 
     # switching the general solver off stops it live

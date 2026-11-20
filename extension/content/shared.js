@@ -147,7 +147,15 @@
       font: 500 12px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #e2e8f0;
       background: linear-gradient(180deg, #1f2a44, #0b1222); border: 1px solid #ffffff1a;
       border-radius: 999px; padding: 3px 4px 3px 4px; box-shadow: 0 4px 14px #0f172a40;
-      pointer-events: none; max-width: 340px; transition: opacity .2s ease; }
+      pointer-events: auto; cursor: grab; user-select: none; touch-action: none; max-width: 360px;
+      transition: opacity .2s ease; }
+    .pill.dragging { cursor: grabbing; opacity: .85; }
+    .pill.compact { gap: 2px; padding: 2px; max-width: none; }
+    .pill.compact .msg { display: none; }
+    .pill.compact button.solve { padding: 4px 8px; }
+    button.close { background: transparent; color: #94a3b8; padding: 2px 6px; font: 700 14px/1 system-ui, sans-serif;
+      border-radius: 999px; }
+    button.close:hover { color: #f1f5f9; background: #ffffff1a; filter: none; }
     .logo { width: 20px; height: 20px; flex: none; }
     .logo .ck { stroke: #f59e0b; transition: stroke .2s ease; }
     .solving .logo .ck { stroke: #3b82f6; animation: p 1.1s ease-in-out infinite; }
@@ -177,22 +185,66 @@
       this.host.style.cssText = "all: initial; position: static;";
       const root = this.host.attachShadow({ mode: "open" }); // open: end-to-end tests click it
       root.innerHTML = `<style>${BADGE_CSS}</style><div class="pill idle" role="status">${MARK}` +
-        '<span class="msg">Captchosa</span><button type="button" hidden></button></div>';
-      root.querySelector("button").textContent = t("solveButton", "Solve");
+        '<span class="msg">Captchosa</span><button type="button" class="solve" hidden></button>' +
+        '<button type="button" class="close">×</button></div>';
       this.pill = root.querySelector(".pill");
       this.msg = root.querySelector(".msg");
-      this.button = root.querySelector("button");
+      this.button = root.querySelector("button.solve");
+      this.button.textContent = t("solveButton", "Solve");
+      this.closeBtn = root.querySelector("button.close");
+      this.closeBtn.title = t("closeBadge", "Hide");
+      this.closeBtn.setAttribute("aria-label", t("closeBadge", "Hide"));
       this.button.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
         onSolve();
       });
+      // x hides the pill for this captcha (the solver keeps working)
+      this.dismissed = false;
+      this.closeBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.dismissed = true;
+        this.host.style.display = "none";
+      });
+      // drag anywhere on the pill except its buttons; the spot is kept relative to the captcha
+      this.manual = null;
+      this.pill.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0 || e.target.closest("button")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const start = { x: e.clientX, y: e.clientY, l: parseFloat(this.pill.style.left) || 0,
+          t: parseFloat(this.pill.style.top) || 0 };
+        try { this.pill.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+        this.pill.classList.add("dragging");
+        const move = (ev) => {
+          ev.preventDefault();
+          const l = Math.max(0, Math.min(innerWidth - this.pill.offsetWidth, start.l + ev.clientX - start.x));
+          const top = Math.max(0, Math.min(innerHeight - this.pill.offsetHeight, start.t + ev.clientY - start.y));
+          this.pill.style.left = `${Math.round(l)}px`;
+          this.pill.style.top = `${Math.round(top)}px`;
+          const r = this.anchor && this.anchor.isConnected ? this.anchor.getBoundingClientRect() : { left: 0, top: 0 };
+          this.manual = { dx: l - r.left, dy: top - r.top };
+        };
+        const up = (ev) => {
+          try { this.pill.releasePointerCapture(ev.pointerId); } catch (_) { /* already released */ }
+          this.pill.classList.remove("dragging");
+          this.pill.removeEventListener("pointermove", move);
+          this.pill.removeEventListener("pointerup", up);
+          this.pill.removeEventListener("pointercancel", up);
+        };
+        this.pill.addEventListener("pointermove", move);
+        this.pill.addEventListener("pointerup", up);
+        this.pill.addEventListener("pointercancel", up);
+      });
       this.anchor = null;
       this.reposition = this.reposition.bind(this);
     }
 
-    attach(anchor) {
+    // anchor: the captcha; avoid: other elements the pill must never cover (e.g. the input)
+    attach(anchor, avoid) {
       this.anchor = anchor;
+      this.avoid = (avoid || []).filter(Boolean);
       if (!this.host.isConnected) (document.body || document.documentElement).appendChild(this.host);
       addEventListener("scroll", this.reposition, true);
       addEventListener("resize", this.reposition);
@@ -210,30 +262,72 @@
     }
 
     applySettings() {
-      this.host.style.display = settings.enabled && settings.pageBadge ? "" : "none";
+      this.host.style.display = settings.enabled && settings.pageBadge && !this.dismissed ? "" : "none";
     }
 
-    // Put the pill beside the captcha (right, else above, else below), never over it.
+    // Put the pill next to the captcha without covering it, its input or the focused field.
+    // Tries right/left/above/below the captcha and the input; in a cramped frame the pill
+    // shrinks to its icon; as a last resort the spot with the least overlap wins.
+    // After the user dragged it, the pill keeps that offset from the captcha.
     reposition() {
       if (!this.anchor || !this.anchor.isConnected) return;
-      const r = this.anchor.getBoundingClientRect();
-      const w = this.pill.offsetWidth || 180;
-      const h = this.pill.offsetHeight || 30;
-      let left;
-      let top;
-      if (r.right + 8 + w <= innerWidth - 4) {
-        left = r.right + 8;
-        top = Math.max(4, Math.min(innerHeight - h - 4, r.top + Math.min(r.height, 120) / 2 - h / 2));
-      } else {
-        left = Math.max(4, Math.min(innerWidth - w - 4, r.right - w));
-        top = r.top - h - 6 >= 4 ? r.top - h - 6 : Math.min(innerHeight - h - 4, r.bottom + 6);
+      const ar = this.anchor.getBoundingClientRect();
+      if (this.manual) {
+        const l = Math.max(0, Math.min(innerWidth - this.pill.offsetWidth, ar.left + this.manual.dx));
+        const top = Math.max(0, Math.min(innerHeight - this.pill.offsetHeight, ar.top + this.manual.dy));
+        this.pill.style.left = `${Math.round(l)}px`;
+        this.pill.style.top = `${Math.round(top)}px`;
+        return;
       }
-      this.pill.style.top = `${Math.round(top)}px`;
-      this.pill.style.left = `${Math.round(left)}px`;
+      // covering an input the user types into is 10x worse than covering the picture
+      const keep = [[this.anchor, 1], ...(this.avoid || []).map((el) => [el, 10]), [document.activeElement, 10]]
+        .filter(([el]) => el && el !== document.body && el !== document.documentElement && el.isConnected &&
+          el !== this.host)
+        .map(([el, weight]) => Object.assign(el.getBoundingClientRect().toJSON(), { weight }))
+        .filter((r) => r.width > 0 && r.height > 0);
+      const place = () => {
+        const w = this.pill.offsetWidth || 180;
+        const h = this.pill.offsetHeight || 30;
+        const gap = 6;
+        const vw = innerWidth;
+        const vh = innerHeight;
+        const cands = [];
+        for (const r of keep.slice(0, 2)) {
+          const midY = r.top + Math.min(r.height, 120) / 2 - h / 2;
+          cands.push([r.right + gap, midY], [r.left - gap - w, midY],
+            [r.right - w, r.top - h - gap], [r.left, r.top - h - gap],
+            [r.left, r.bottom + gap], [r.right - w, r.bottom + gap]);
+        }
+        cands.push([vw - w - 4, 4], [vw - w - 4, vh - h - 4], [4, 4], [4, vh - h - 4]);
+        let best = null;
+        for (const [l0, t0] of cands) {
+          const l = Math.max(4, Math.min(vw - w - 4, l0));
+          const top = Math.max(4, Math.min(vh - h - 4, t0));
+          let overlap = 0;
+          for (const r of keep) {
+            const ox = Math.max(0, Math.min(l + w, r.right) - Math.max(l, r.left));
+            const oy = Math.max(0, Math.min(top + h, r.bottom) - Math.max(top, r.top));
+            overlap += ox * oy * r.weight;
+          }
+          if (!best || overlap < best.overlap) best = { l, top, overlap };
+          if (overlap === 0) break;
+        }
+        return best;
+      };
+      this.pill.classList.remove("compact");
+      let spot = place();
+      if (spot.overlap > 0) {
+        this.pill.classList.add("compact"); // icon (+ buttons) only; the text stays in the tooltip
+        spot = place();
+      }
+      this.pill.style.top = `${Math.round(spot.top)}px`;
+      this.pill.style.left = `${Math.round(spot.l)}px`;
     }
 
     set(state, text, showButton) {
-      this.pill.className = `pill ${state}`;
+      const keepCls = ["compact", "dragging"].filter((c) => this.pill.classList.contains(c)).join(" ");
+      this.pill.className = `pill ${state}${keepCls ? " " + keepCls : ""}`;
+      this.pill.title = `Captchosa: ${text}`;
       this.msg.textContent = text;
       this.msg.title = `Captchosa: ${text}`;
       this.button.hidden = !showButton;

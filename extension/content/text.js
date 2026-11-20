@@ -255,7 +255,7 @@
       const key = keyOf(img);
       if (state.done.has(key)) return;
       if (!state.badge) state.badge = new CS.Badge(() => solve(true));
-      state.badge.attach(img);
+      state.badge.attach(img, [input]);
       state.current = { key, img, input };
       if (!s.enabled || !s.solvers[KIND]) {
         state.badge.set("idle", s.enabled ? "solver is off" : "Captchosa is off", false);

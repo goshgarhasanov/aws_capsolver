@@ -38,6 +38,7 @@ STRINGS = {
                   "Her sitedeki resimli metin captcha (otomatik algılanır)",
                   "İstənilən saytda şəkilli mətn captcha (avtomatik tapılır)",
                   "Любая текстовая капча-картинка на любом сайте (находится автоматически)"),
+    "closeBadge": ("Hide", "Gizle", "Gizlət", "Скрыть"),
     "solvingPlaceholder": ("Solving…", "Çözülüyor…", "Həll olunur…", "Решается…"),
     "allowAllSites": ("Allow on all sites", "Tüm sitelerde izin ver", "Bütün saytlarda icazə ver",
                       "Разрешить на всех сайтах"),

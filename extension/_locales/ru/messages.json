@@ -47,6 +47,9 @@
   "desc_text": {
     "message": "Любая текстовая капча-картинка на любом сайте (находится автоматически)"
   },
+  "closeBadge": {
+    "message": "Скрыть"
+  },
   "solvingPlaceholder": {
     "message": "Решается…"
   },

@@ -47,6 +47,9 @@
   "desc_text": {
     "message": "Any image text captcha on any site (detected automatically)"
   },
+  "closeBadge": {
+    "message": "Hide"
+  },
   "solvingPlaceholder": {
     "message": "Solving…"
   },

@@ -19,6 +19,11 @@ All notable changes to the Captchosa browser extension. Versions follow
 ### Changed
 - The input shows *Solving…* (localised) while the answer is on its way.
 - Text tasks are sent with `case: true`: the answer keeps upper/lower case exactly as read.
+- The in-page pill never covers the captcha input (or the focused field): it tries the free
+  sides of the picture and of the input, shrinks to its icon in cramped frames, and picks the
+  least-overlapping spot as a last resort.
+- The pill can be dragged anywhere (it then keeps that offset from the captcha) and has an ×
+  that hides it for that captcha; solving goes on.
 
 ### Tests
 - New end-to-end pages: label-only, canvas, shadow DOM + Turkish wording, a negative login page,
