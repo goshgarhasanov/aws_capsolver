@@ -231,3 +231,56 @@ def test_scores_are_probabilities():
     s, method = grid.get_engine().scores(tiles, target)
     assert method in ("head", "zeroshot")
     assert s.shape == (9,) and np.all((s >= 0) & (s <= 1))
+
+
+# ------------------------------------------------------------------ open vocabulary
+@pytest.mark.parametrize("kwargs", [{"top_k": 0}, {"top_k": 21}, {"top_k": "3"}, {"top_k": True}])
+def test_describe_tiles_rejects_bad_top_k(kwargs, monkeypatch):
+    monkeypatch.setattr(grid, "get_engine", lambda: pytest.fail("model must not be loaded"))
+    with pytest.raises(InvalidInput):
+        vision.describe_tiles([_jpeg()], **kwargs)
+
+
+@pytest.mark.parametrize("tiles", [[], [b"x"] * 17, "notalist"])
+def test_describe_tiles_rejects_bad_tiles(tiles, monkeypatch):
+    monkeypatch.setattr(grid, "get_engine", lambda: pytest.fail("model must not be loaded"))
+    with pytest.raises(InvalidInput):
+        vision.describe_tiles(tiles)
+
+
+def test_open_vocabulary_contains_known_and_everyday_objects():
+    names = grid.open_vocabulary()
+    assert len(names) > 900 and len(set(names)) == len(names)
+    for n in (*grid.KNOWN_TARGETS, "acoustic guitar", "airliner", "goldfinch"):
+        assert n in names
+
+
+@model
+def test_describe_tiles_names_the_objects():
+    hits = total = 0
+    for _, tiles, _, _ in _fixture_grids():
+        meta_classes = None
+        for d in FIXTURES.glob("*"):
+            m = json.loads((d / "meta.json").read_text())
+            if [(d / f"tile_{i}.jpg").read_bytes() for i in range(9)] == tiles:
+                meta_classes = m["tile_classes"]
+        desc = vision.describe_tiles(tiles, top_k=3)
+        assert len(desc) == 9 and all(len(d) == 3 for d in desc)
+        assert all(0.0 <= p <= 1.0 for d in desc for _, p in d)
+        for cls, d in zip(meta_classes, desc):
+            words = {cls, *grid.SYNONYMS.get(cls, ())}
+            hits += any(any(w in name for w in words) for name, _ in d)
+            total += 1
+    assert hits / total >= 0.85, f"{hits}/{total}"
+
+
+@model
+def test_never_seen_target_uses_open_vocabulary():
+    eng = grid.get_engine()
+    for _, tiles, target, answer in _fixture_grids():
+        feats = eng.embed(grid.decode_tiles(tiles))
+        # leave-class-out: the target is treated as unknown (contrast = open vocabulary)
+        p = eng.zero_shot_probs(feats, target, open_vocab=True)
+        assert grid.select_tiles(p, count=5) == answer
+        # an object that is not in the grid gets low scores everywhere
+        assert float(eng.zero_shot_probs(feats, "acoustic guitar").max()) < 0.5

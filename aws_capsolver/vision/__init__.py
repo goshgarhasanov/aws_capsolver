@@ -2,6 +2,7 @@
 
 Public interface (imported by the HTTP service):
     classify_grid(images, target, threshold=None) -> list[int]
+    describe_tiles(images, top_k=3) -> [[(name, prob), ...], ...]
     solve_toycar(image) -> tuple[int, int]
     transcribe(audio_b64) -> str
     UnsupportedProblem
@@ -34,6 +35,13 @@ def count_from_problem_type(problem_type: str | None) -> int | None:
     return int(part) if part.isdigit() else None
 
 
+def describe_tiles(images: list[bytes], top_k: int = 3) -> list[list[tuple[str, float]]]:
+    """Name what each tile shows (open vocabulary of ~1000 objects): [[(name, prob), ...], ...]."""
+    from .grid import describe_tiles as _impl
+
+    return _impl(images, top_k)
+
+
 def solve_toycar(image: bytes) -> tuple[int, int]:
     """Return the [x, y] end point of the car path ("toycarcity" problems)."""
     from .toycar import solve_toycar as _impl
@@ -50,5 +58,5 @@ def transcribe(audio_b64: str) -> str:
     return _impl(audio_b64)
 
 
-__all__ = ["classify_grid", "count_from_problem_type", "solve_toycar", "transcribe", "UnsupportedProblem",
+__all__ = ["classify_grid", "count_from_problem_type", "describe_tiles", "solve_toycar", "transcribe", "UnsupportedProblem",
            "VisionError", "InvalidInput"]

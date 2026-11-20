@@ -54,7 +54,10 @@ def novel_tiles(engine, gids: list[str], train: list[str], cos: float = 0.95) ->
     return {g: (emb[g] @ T.T).max(1) <= cos for g in gids}
 
 
-def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, count: int | None = 5) -> dict:
+def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, count: int | None = 5,
+             unknown: bool = False) -> dict:
+    """Score ``gids``; ``unknown`` = leave-class-out: every target is treated as never seen
+    (no head, contrast = open vocabulary minus the target's own names)."""
     from aws_capsolver.vision.grid import select_tiles, normalize_target
 
     labels = vd.train_labels()
@@ -64,9 +67,11 @@ def evaluate(engine, gids: list[str], threshold: float | None, use_head: bool, c
     for g in gids:
         t = normalize_target(vd.target(g))
         feats = [pb[g] for pb in per_bb]
-        s = engine.head_probs(feats, t) if use_head else None
+        s = engine.head_probs(feats, t) if use_head and not unknown else None
         method = "head"
-        if s is None:
+        if s is None and unknown:
+            s, method = engine.zero_shot_probs(feats, t, open_vocab=True), "open-vocab"
+        elif s is None:
             s, method = engine.zero_shot_probs(feats, t), "zeroshot"
         if threshold is None and count:
             pred = set(select_tiles(s, count=count))
@@ -109,6 +114,8 @@ def main() -> None:
     ap.add_argument("--models", help="comma separated model:pretrained (default: engine default)")
     ap.add_argument("--compare", action="store_true", help="zero-shot sweep over candidate backbones")
     ap.add_argument("--no-head", action="store_true")
+    ap.add_argument("--unknown", action="store_true",
+                    help="leave-class-out: treat every target as never seen (open vocabulary)")
     ap.add_argument("--tta", action="store_true", help="embed tile + mirror image")
     ap.add_argument("--threshold", type=float, help="threshold mode instead of top-K")
     ap.add_argument("--count", type=int, default=5, help="select top-K tiles (0: threshold mode)")
@@ -127,16 +134,19 @@ def main() -> None:
     for specs in runs:
         eng = GridEngine(specs=specs, head_path="none" if args.no_head else None,
                          tta=args.tta, threads=args.threads or None)
-        if eng.head is not None and eng.head.get("trained_on", "train") != "train" and args.split != "train":
+        if eng.head is not None and not args.no_head and not args.unknown \
+                and eng.head.get("trained_on", "train") != "train" and args.split != "train":
             print(f"WARNING: head was trained on {eng.head['trained_on']}; {args.split} is NOT held out",
                   file=sys.stderr)
-        res = evaluate(eng, gids, args.threshold, use_head=not args.no_head, count=args.count)
+        res = evaluate(eng, gids, args.threshold, use_head=not args.no_head, count=args.count,
+                       unknown=args.unknown)
         novel = novel_tiles(eng, gids, sp["train"])
         n_nov = sum(int(m.sum()) for m in novel.values())
         ok_nov = sum(int(res["tile_ok"][g][m].sum()) for g, m in novel.items())
         lat = latency(eng)
         mode = f"top{args.count}" if args.count and args.threshold is None else "threshold"
-        row = {"models": eng.specs, "head": bool(eng.head) and not args.no_head, "tta": eng.tta,
+        row = {"models": eng.specs, "head": bool(eng.head) and not args.no_head and not args.unknown,
+               "unknown_targets": args.unknown, "tta": eng.tta,
                "split": args.split, "mode": mode, "grids": res["grids"], "grids_ok": res["grids_ok"],
                "grid_acc": round(res["grid_acc"], 4),
                "grid_acc_wilson95_low": round(wilson_lower(res["grids_ok"], res["grids"]), 4),

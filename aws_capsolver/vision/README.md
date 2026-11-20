@@ -5,6 +5,7 @@ Image solvers for AWS WAF CAPTCHA problems.
 | problem type            | function                                   | status |
 |-------------------------|--------------------------------------------|--------|
 | `gridcaptcha-5-*`       | `classify_grid(images, target) -> [int]`   | implemented (CLIP + trained head) |
+| any tiles               | `describe_tiles(images, top_k=3)`          | names what each tile shows, ~1000-object open vocabulary |
 | `toycarcity`            | `solve_toycar(image) -> (x, y)`            | stub, raises `UnsupportedProblem` (never served by the sampled endpoint) |
 | `noisyneighbour-*`      | `transcribe(audio_b64) -> str`             | separate module (`audio.py`), raises `UnsupportedProblem` when absent |
 
@@ -44,6 +45,24 @@ all of them are classified correctly. The tile pool repeats a lot, so the shippe
 retrained on all 1000 grids (`--all`). Latency of the default pair: about 0.6 s per grid on an
 idle 8-thread CPU (estimated from per-backbone timings), 1.5 s measured while the machine
 was fully loaded by other jobs.
+
+### New, never-seen targets (open vocabulary)
+
+A target the head does not know (e.g. "guitar", "bird") is scored zero-shot against ~1000
+everyday object names (ImageNet-1k + the known classes), leaving out the names that mean the
+target itself. Leave-class-out test - every target treated as never seen, no head - on the
+same 319 test grids (`tools/bench_vision.py --split test --unknown`):
+
+| backbones | grid acc |
+|---|---|
+| ViT-B-32 only | 98.1 % |
+| ViT-B-16 only | 99.1 % |
+| SigLIP2 B-16 only | 99.4 % |
+| **ViT-B-32 + ViT-B-16 (default)** | **99.7 % (318/319)** |
+
+The vocabulary embeddings are computed once per backbone (in `warmup()`) and cached under
+`~/.cache/aws_capsolver`. Abstract categories ("flying animals") were not measurable on
+this data; collecting and labelling such grids and retraining remains the reliable path.
 
 ## Retraining
 
