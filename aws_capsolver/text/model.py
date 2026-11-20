@@ -22,7 +22,7 @@ from torch import nn
 IMG_W, IMG_H = 160, 55
 NUM_CLASSES = 11  # blank + 10 digits
 ALPHABET = "0123456789"
-ARCH = "crnn_v1"
+ARCH = "crnn_v2"  # v2: per-image brightness normalisation in to_tensor()
 
 
 def _block(cin: int, cout: int) -> nn.Sequential:
@@ -57,8 +57,16 @@ class CRNN(nn.Module):
 
 
 def to_tensor(rgb: np.ndarray) -> torch.Tensor:
-    """HxWx3 uint8 (already IMG_H x IMG_W) -> 3xHxW float tensor."""
-    t = torch.from_numpy(np.array(rgb, dtype=np.uint8, copy=True)).permute(2, 0, 1).float()
+    """HxWx3 uint8 (already IMG_H x IMG_W) -> 3xHxW float tensor.
+
+    Brightness is normalised per image: the 90th percentile of the luminance (the
+    background, which covers most of the captcha) is mapped to white, so darker or
+    greyed re-encodings of the image read the same.
+    """
+    a = np.asarray(rgb, dtype=np.float32)
+    ref = float(np.percentile(a.mean(axis=2), 90))
+    a = np.clip(a * (255.0 / max(ref, 32.0)), 0.0, 255.0)
+    t = torch.from_numpy(a).permute(2, 0, 1)
     return t.div_(255.0).sub_(0.5).div_(0.5)
 
 

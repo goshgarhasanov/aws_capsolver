@@ -111,13 +111,26 @@ def main() -> None:
     ap.add_argument("--readers", default="ddddocr,ddddocr_vote,ours")
     ap.add_argument("--weights")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--synthetic", type=int, default=0,
+                    help="evaluate on N faithful synthetic captchas (seed 777) instead of real")
     args = ap.parse_args()
-    rows = text_data.load_real(None if args.split == "all" else args.split)
+    if args.synthetic:
+        import random
+
+        import text_synth
+        rng = random.Random(777)
+        rows = []
+        for i in range(args.synthetic):
+            t = text_synth.random_text(rng)
+            rows.append((f"synth{i}", text_synth.render(t, rng, faithful=True), t))
+        args.split = "synthetic-faithful"
+    else:
+        rows = text_data.load_real(None if args.split == "all" else args.split)
     readers = {"ddddocr": ddddocr_plain, "ddddocr_vote": ddddocr_vote}
     if "ours" in args.readers:
         readers["ours"] = ours_factory(args.weights)
     print(f"split={args.split} n={len(rows)}")
-    print(f"{'reader':<14}{'exact':>8}{'k/n':>8}{'wilson95':>10}{'char':>8}{'ms/img':>9}")
+    print(f"{'reader':<14}{'exact':>8}{'k/n':>11}{'wilson95':>10}{'char':>8}{'ms/img':>9}")
     for name in args.readers.split(","):
         fn = readers[name]
         fn(rows[0][1])  # warm-up (model load) outside the timing
@@ -131,7 +144,7 @@ def main() -> None:
                 print(f"  {name}: {fname} {label} -> {pred}")
         ms = (time.perf_counter() - t0) / max(1, len(rows)) * 1000
         n = len(rows)
-        print(f"{name:<14}{k / n:>8.3f}{f'{k}/{n}':>8}{wilson_lower(k, n):>10.3f}"
+        print(f"{name:<14}{k / n:>8.3f}{f'{k}/{n}':>11}{wilson_lower(k, n):>10.3f}"
               f"{chars / (5 * n):>8.3f}{ms:>9.1f}")
 
 

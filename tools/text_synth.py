@@ -40,7 +40,7 @@ import os
 import random
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 FONT_DIR = ROOT / "data" / "text" / "fonts"
@@ -94,6 +94,25 @@ def _spiral(draw: ImageDraw.ImageDraw, rng: random.Random, color) -> None:
         theta -= thetac
 
 
+def _draw_scaled(img: Image.Image, ch: str, font, x: int, baseline: int,
+                 rng: random.Random) -> None:
+    """Draw one glyph with a small random width/height scale.
+
+    Covers rasteriser / hinting differences between GD's FreeType build and Pillow's
+    (e.g. the real '0' is ~0.5 px wider and digits snap to exactly 20 px high).
+    """
+    ascent, descent = font.getmetrics()
+    w = int(font.getlength(ch)) + 4
+    h = ascent + descent
+    glyph = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(glyph).text((2, 0), ch, font=font, fill=255)
+    sx, sy = rng.uniform(0.9, 1.12), rng.uniform(0.95, 1.03)
+    nw, nh = max(1, round(w * sx)), max(1, round(h * sy))
+    glyph = glyph.resize((nw, nh), Image.BICUBIC)
+    top = baseline - round(ascent * sy)
+    img.paste((0, 0, 0), (x - round(2 * sx), top), glyph)
+
+
 def render(text: str, rng: random.Random, *, faithful: bool = False) -> bytes:
     """Render one captcha and return JPEG bytes.
 
@@ -124,12 +143,21 @@ def render(text: str, rng: random.Random, *, faithful: bool = False) -> bytes:
         baseline = rng.randint(H // 2, H - 3)
         if not faithful:
             baseline += rng.choice((0, 0, 0, -1, 1))
-        # PIL anchors text at the ascender line; shift so ``baseline`` is the baseline.
-        draw.text((int(x), baseline - ascent), ch, font=font, fill=(0, 0, 0))
+        if not faithful and rng.random() < 0.6:
+            _draw_scaled(img, ch, font, int(x), baseline, rng)
+        else:
+            # PIL anchors text at the ascender line; shift so ``baseline`` is the baseline.
+            draw.text((int(x), baseline - ascent), ch, font=font, fill=(0, 0, 0))
         x += adv
 
     if not faithful and rng.random() < 0.15:
         img = img.filter(ImageFilter.GaussianBlur(rng.uniform(0.2, 0.5)))
+    if not faithful and rng.random() < 0.15:
+        img = ImageEnhance.Brightness(img).enhance(rng.uniform(0.6, 1.1))
+    if not faithful and rng.random() < 0.15:
+        img = ImageEnhance.Contrast(img).enhance(rng.uniform(0.6, 1.3))
+    if not faithful and rng.random() < 0.05:
+        img = img.convert("L").convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
