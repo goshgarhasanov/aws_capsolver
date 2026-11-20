@@ -128,6 +128,7 @@ def cmd_label(args) -> None:
     test_runs = _load_runs(args.test_models) if args.test_models else dev_runs
     manual_path = DATA / "manual.json"
     manual = json.loads(manual_path.read_text()) if manual_path.exists() else {}
+    base = json.loads(Path(args.union).read_text()) if args.union else {}
     labels, review = {}, []
     for cid in clip_ids():
         split = split_of(cid)
@@ -140,9 +141,11 @@ def cmd_label(args) -> None:
         for k in range(nseg):
             votes = Counter(A.collapse_repeats(A.normalise(r[cid]["segments"][k]["text"]))
                             for r in runs.values() if k < len(r[cid]["segments"]))
-            text, n = votes.most_common(1)[0]
-            if n >= args.min_agree and len(text.split()) == 1:
-                words.add(text)
+            for text, n in votes.items():
+                if n >= args.min_agree and text and len(text.split()) == 1:
+                    words.add(text)
+        if args.union and cid in base:
+            words |= set(base[cid]["words"])
         how = "agreement"
         if cid in manual:
             words, how = set(manual[cid]), "manual"
@@ -331,6 +334,7 @@ def main() -> None:
     p = sub.add_parser("label")
     p.add_argument("--models", nargs="+", required=True, help="runs voting on dev clips")
     p.add_argument("--test-models", nargs="+", help="runs voting on held-out clips")
+    p.add_argument("--union", help="earlier labels.json whose words are kept (add-only)")
     p.add_argument("--min-agree", type=int, default=2)
     p = sub.add_parser("eval")
     p.add_argument("--model", default=A.MODEL_NAME)
