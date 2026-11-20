@@ -89,6 +89,8 @@ def make_solver(args) -> A.AudioSolver:
 def cmd_transcribe(args) -> None:
     RUNS.mkdir(parents=True, exist_ok=True)
     tag = args.model if args.window <= 0 else f"{args.model}@{args.window:g}s"
+    if args.seg:
+        tag += "+" + "+".join(args.seg)
     out_path = RUNS / f"{tag}.json"
     done = json.loads(out_path.read_text()) if out_path.exists() else {}
     solver = make_solver(args)
@@ -105,7 +107,8 @@ def cmd_transcribe(args) -> None:
         for s, c in zip(segs, decoded):
             rows.append({"start": round(s.start / A.SR, 2), "dur": round(s.seconds, 2),
                          "peak": round(s.peak_db, 1), "text": c.text,
-                         "logprob": round(c.logprob, 3), "no_speech": round(c.no_speech, 3)})
+                         "logprob": round(c.logprob, 3), "no_speech": round(c.no_speech, 3),
+                         "alts": [[t, round(v, 3)] for t, v in c.alternatives]})
         done[cid] = {"score": round(score, 3), "segments": rows,
                      "ms": int((time.monotonic() - t0) * 1000)}
         log.info("[%d] %s %s", i, cid, [r["text"] for r in rows])
@@ -166,7 +169,12 @@ def cmd_eval(args) -> None:
            (args.split == "all" or v["split"] == args.split)]
     if args.limit:
         ids = ids[: args.limit]
+    if args.stem_margin is not None:
+        A.STEM_MARGIN = args.stem_margin
     solver = make_solver(args)
+    if args.second:
+        solver.second = A.AudioSolver(args.second, cpu_threads=args.threads,
+                                      window_s=args.second_window, seg=solver.seg)
     solver.solve(load_clip(ids[0]))  # warm-up
     ok, times, wrong = 0, [], []
     for cid in ids:
@@ -179,12 +187,123 @@ def cmd_eval(args) -> None:
         else:
             wrong.append((cid, answer, labels[cid]["words"]))
     n = len(ids)
-    print(f"model={args.model} window={args.window:g}s beam={args.beam} threads={args.threads} "
+    print(f"model={args.model} window={args.window:g}s second={args.second or '-'} "
+          f"stem_margin={A.STEM_MARGIN:g} beam={args.beam} threads={args.threads} "
           f"split={args.split}: "
           f"{ok}/{n} = {100 * ok / max(n, 1):.1f}%  latency mean {statistics.mean(times):.2f}s "
           f"p95 {sorted(times)[int(0.95 * (n - 1))]:.2f}s max {max(times):.2f}s")
     for w in wrong:
         print("  WRONG", *w)
+
+
+def disputed_clips(voters: list[str]) -> list[str]:
+    """Clips where the voter runs do not all agree on every segment (or miss a segment)."""
+    runs = _load_runs(voters)
+    out = []
+    for cid in clip_ids():
+        rows = [r[cid]["segments"] for r in runs.values() if cid in r]
+        if len(rows) < len(runs):
+            continue
+        n = max(len(r) for r in rows)
+        for k in range(n):
+            texts = {A.collapse_repeats(A.normalise(r[k]["text"])) if k < len(r) else ""
+                     for r in rows}
+            if len(texts) > 1 or not all(len(t.split()) == 1 for t in texts):
+                out.append(cid)
+                break
+    return out
+
+
+def cmd_wordrun(args) -> None:
+    """Re-decode the cut words of disputed clips with word timestamps (stock pipeline,
+    temperature 0) and keep only the words whose span is loud in the original audio, so
+    background speech that leaked into a cut is dropped. Cached as <model>-wt.json."""
+    RUNS.mkdir(parents=True, exist_ok=True)
+    out_path = RUNS / f"{args.model}-wt.json"
+    done = json.loads(out_path.read_text()) if out_path.exists() else {}
+    todo = [c for c in disputed_clips(args.voters) if c not in done]
+    log.info("%d disputed clips to re-decode", len(todo))
+    solver = A.AudioSolver(args.model, cpu_threads=args.threads, window_s=None)
+    multilingual = solver.model.model.is_multilingual
+    for i, cid in enumerate(todo):
+        x = load_clip(cid)
+        segs, score, rel = segments_of(x, solver.seg)
+        rows = []
+        for seg in segs:
+            clip, offset = A.cut_segment(x, seg, rel, solver.seg)
+            with solver._lock:
+                parts, _ = solver.model.transcribe(
+                    clip, beam_size=5, word_timestamps=True, temperature=0.0,
+                    condition_on_previous_text=False, vad_filter=False,
+                    language="en" if multilingual else None)
+                words = [w for p in parts for w in (p.words or [])]
+            kept = []
+            for w in words:
+                a = max(0, int((offset + w.start * A.SR) / A.HOP))
+                b = min(len(rel), max(a + 1, int((offset + w.end * A.SR) / A.HOP)))
+                if b > a and float(rel[a:b].max()) >= args.keep_db:
+                    kept.append(w.word)
+            rows.append({"start": round(seg.start / A.SR, 2), "dur": round(seg.seconds, 2),
+                         "text": A.normalise(" ".join(kept)),
+                         "raw": A.normalise(" ".join(w.word for w in words)),
+                         "logprob": 0.0, "no_speech": 0.0})
+        done[cid] = {"score": round(score, 3), "segments": rows}
+        log.info("[%d/%d] %s %s", i + 1, len(todo), cid, [(r["text"], r["raw"]) for r in rows])
+        if i % 5 == 0:
+            out_path.write_text(json.dumps(done, indent=1))
+    out_path.write_text(json.dumps(done, indent=1))
+
+
+def _cands(row_list, alts=True):
+    return [A.Candidate(A.collapse_repeats(A.normalise(r["text"])), r["logprob"],
+                        r["no_speech"], None, 1,
+                        [(t, v) for t, v in r.get("alts", [])] if alts else [])
+            for r in row_list]
+
+
+def cmd_simulate(args) -> None:
+    """Offline policy check on cached runs (same segmentation required): accuracy of
+    choose_answer / prefer_stem / second-opinion agreement against labels.json."""
+    from faster_whisper.tokenizer import Tokenizer
+    from faster_whisper.utils import download_model
+    import tokenizers
+
+    tok = tokenizers.Tokenizer.from_file(
+        str(Path(download_model(args.tokenizer_model)) / "tokenizer.json"))
+    tokenizer = Tokenizer(tok, False)
+
+    def ntok(text):
+        return sum(len(tokenizer.encode(" " + w)) for w in text.split()) or 1
+
+    def common(word):
+        return len(tokenizer.encode(" " + word)) == 1
+
+    labels = json.loads(LABELS.read_text())
+    prim = _load_runs([args.primary])[args.primary]
+    sec = _load_runs([args.second])[args.second] if args.second else None
+    for margin in args.margins:
+        ok = n = 0
+        wrong = []
+        for cid, v in labels.items():
+            if v["split"] != args.split or not v["words"] or cid not in prim:
+                continue
+            if sec is not None and cid not in sec:
+                continue
+            cands = _cands(prim[cid]["segments"])
+            for c in cands:
+                c.n_tokens = ntok(c.text)
+            cands = [A.prefer_stem(c, common, margin) for c in cands]
+            others = _cands(sec[cid]["segments"], alts=False) if sec is not None else None
+            answer = A.choose_answer(cands, others)
+            n += 1
+            ok += answer in v["words"]
+            if answer not in v["words"]:
+                wrong.append((cid, answer, v["words"]))
+        print(f"{args.primary} second={args.second or '-'} margin={margin:g} {args.split}: "
+              f"{ok}/{n} = {100 * ok / max(n, 1):.1f}%")
+        if args.verbose:
+            for w in wrong:
+                print("  WRONG", *w)
 
 
 def cmd_show(args) -> None:
@@ -206,6 +325,7 @@ def main() -> None:
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--beam", type=int, default=5)
     p.add_argument("--split", choices=["dev", "test", "all"], default="all")
+    p.add_argument("--seg", nargs="*", help="SegParams overrides, e.g. edge_end_s=0.03")
     p.add_argument("--window", type=float, default=0.0,
                    help="encoder window in seconds; 0 = stock faster-whisper pipeline")
     p = sub.add_parser("label")
@@ -220,10 +340,27 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--window", type=float, default=A.WINDOW_S)
     p.add_argument("--seg", nargs="*", help="SegParams overrides, e.g. duck_gain_db=-12")
+    p.add_argument("--second", default="", help="second-opinion model, e.g. small.en")
+    p.add_argument("--second-window", type=float, default=A.SECOND_WINDOW_S)
+    p.add_argument("--stem-margin", type=float, default=None)
+    p = sub.add_parser("wordrun")
+    p.add_argument("--model", default="large-v3")
+    p.add_argument("--voters", nargs="+",
+                   default=["large-v3@30s", "distil-large-v3@30s", "small.en"])
+    p.add_argument("--threads", type=int, default=28)
+    p.add_argument("--keep-db", type=float, default=-8.0)
+    p = sub.add_parser("simulate")
+    p.add_argument("--primary", required=True)
+    p.add_argument("--second", default="")
+    p.add_argument("--split", choices=["dev", "test"], default="dev")
+    p.add_argument("--margins", type=float, nargs="+", default=[0.0])
+    p.add_argument("--tokenizer-model", default="medium.en")
+    p.add_argument("-v", "--verbose", action="store_true")
     p = sub.add_parser("show")
     p.add_argument("clip")
     args = ap.parse_args()
-    {"transcribe": cmd_transcribe, "label": cmd_label, "eval": cmd_eval,
+    {"transcribe": cmd_transcribe, "label": cmd_label, "eval": cmd_eval, "wordrun": cmd_wordrun,
+     "simulate": cmd_simulate,
      "show": cmd_show}[args.cmd](args)
 
 

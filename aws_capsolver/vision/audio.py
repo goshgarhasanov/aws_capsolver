@@ -45,7 +45,7 @@ import re
 import threading
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -89,6 +89,9 @@ WINDOW_S = float(os.environ.get("AWS_CAPSOLVER_AUDIO_WINDOW", "20"))  # encoder 
 MAX_SEGMENTS = 4
 MULTI_WORD_PENALTY = 0.7  # a run decoded as several words has background speech in it
 TOKEN_PENALTY = 0.3       # per extra BPE token: common words are 1-2 tokens (tuned on dev)
+STEM_MARGIN = float(os.environ.get("AWS_CAPSOLVER_AUDIO_STEM_MARGIN", "0.0"))
+SECOND_MODEL = os.environ.get("AWS_CAPSOLVER_AUDIO_SECOND_MODEL", "")
+SECOND_WINDOW_S = 10.0
 SIL_S = 0.4
 
 
@@ -207,6 +210,8 @@ class SegParams:
     max_s: float = 1.6
     duck_below_db: float = -14.0   # inside a cut, frames quieter than this are ...
     duck_gain_db: float = 0.0      # ... attenuated by this much (0 = no ducking)
+    edge_end_s: float = -1.0       # widening after the word (< 0: same as edge_s)
+    pad_end_s: float = -1.0        # raw audio kept after the run (< 0: PAD_S)
 
 
 DEFAULT_SEG = SegParams()
@@ -261,7 +266,8 @@ def find_word_segments(x: np.ndarray, instr_end: int, ref_level: float,
         while lo > max(first, a - edge) and db[lo - 1] > params.edge_db:
             lo -= 1
         hi = b
-        while hi < min(len(db), b + edge) and db[hi] > params.edge_db:
+        edge_end = edge if params.edge_end_s < 0 else int(round(params.edge_end_s * fps))
+        while hi < min(len(db), b + edge_end) and db[hi] > params.edge_db:
             hi += 1
         dur = (hi - lo) / fps
         if dur < params.min_s:
@@ -290,7 +296,8 @@ def cut_segment(x: np.ndarray, seg: Segment, rel_db: Optional[np.ndarray] = None
     Returns the clip and the (possibly negative) original sample index of clip[0].
     """
     pad = int(PAD_S * SR)
-    a, b = max(0, seg.start - pad), min(len(x), seg.end + pad)
+    pad_end = pad if params.pad_end_s < 0 else int(params.pad_end_s * SR)
+    a, b = max(0, seg.start - pad), min(len(x), seg.end + pad_end)
     clip = x[a:b].astype(np.float32).copy()
     if rel_db is not None and params.duck_gain_db < 0 and len(clip):
         from scipy.ndimage import uniform_filter1d
@@ -384,6 +391,7 @@ class Candidate:
     no_speech: float
     segment: Optional[Segment] = None
     n_tokens: int = 1   # BPE tokens of the words; mis-heard non-words split into many
+    alternatives: List[Tuple[str, float]] = field(default_factory=list)  # other beams
 
     @property
     def score(self) -> float:
@@ -409,6 +417,7 @@ class AudioSolver:
         self.model = WhisperModel(model_name, device="cpu", compute_type=compute_type,
                                   cpu_threads=cpu_threads)
         self._lock = threading.Lock()  # CTranslate2 model calls are serialised here
+        self.second: Optional["AudioSolver"] = None
         multilingual = self.model.model.is_multilingual
         self.tokenizer = Tokenizer(self.model.hf_tokenizer, multilingual,
                                    task="transcribe" if multilingual else None,
@@ -442,14 +451,19 @@ class AudioSolver:
             results = self.model.model.generate(
                 enc, [self.prompt] * len(clips), beam_size=self.beam_size, max_length=24,
                 return_scores=True, return_no_speech_prob=True, suppress_blank=True,
-                suppress_tokens=self.suppress)
+                suppress_tokens=self.suppress, num_hypotheses=self.beam_size)
         out = []
         for r in results:
-            tokens = [t for t in r.sequences_ids[0] if t < self.tokenizer.eot]
-            text = collapse_repeats(normalise(self.tokenizer.decode(tokens)))
-            avg = r.scores[0] * len(tokens) / (len(tokens) + 1) if tokens else -9.0
-            out.append(Candidate(text, float(avg), float(r.no_speech_prob),
-                                 n_tokens=self._count_tokens(text)))
+            hyps = []
+            for ids, score in zip(r.sequences_ids, r.scores):
+                tokens = [t for t in ids if t < self.tokenizer.eot]
+                text = collapse_repeats(normalise(self.tokenizer.decode(tokens)))
+                avg = score * len(tokens) / (len(tokens) + 1) if tokens else -9.0
+                hyps.append((text, float(avg)))
+            text, avg = hyps[0]
+            out.append(Candidate(text, avg, float(r.no_speech_prob),
+                                 n_tokens=self._count_tokens(text),
+                                 alternatives=hyps[1:]))
         return out
 
     def _count_tokens(self, text: str) -> int:
@@ -471,26 +485,6 @@ class AudioSolver:
         logprob = float(np.mean([s.avg_logprob for s in segments]))
         no_speech = float(max(s.no_speech_prob for s in segments))
         return Candidate(text, logprob, no_speech, n_tokens=self._count_tokens(text))
-
-    def candidates(self, x: np.ndarray) -> Tuple[List[Candidate], float]:
-        """Transcribe every foreground word run; returns (candidates, template score)."""
-        instr_end, score = locate_instruction(x)
-        if score < MIN_TEMPLATE_SCORE:
-            return [], score
-        ref = reference_level(x, instr_end)
-        segs = find_word_segments(x, instr_end, ref, self.seg)[:MAX_SEGMENTS]
-        rel = relative_db(x, ref)
-        clips = [cut_segment(x, seg, rel, self.seg)[0] for seg in segs]
-        if self.window_s:
-            cands = self._decode_batch(clips)
-        else:
-            cands = [self._decode(c) for c in clips]
-        out = []
-        for seg, cand in zip(segs, cands):
-            cand.segment = seg
-            if cand.text:
-                out.append(cand)
-        return out, score
 
     def fallback(self, x: np.ndarray) -> str:
         """No template match: transcribe the clip, keep loud words after 'by me'."""
@@ -518,17 +512,77 @@ class AudioSolver:
                 if len(tokens[i]) >= 3 and " " not in tokens[i] and loudness[i] > ref - 8]
         return max(best)[1] if best else ""
 
+    def decode(self, clips: Sequence[np.ndarray]) -> List[Candidate]:
+        """Decode word clips (batched short-window path, or the stock pipeline)."""
+        if self.window_s:
+            return self._decode_batch(clips)
+        return [self._decode(c) for c in clips]
+
+    def is_common(self, word: str) -> bool:
+        """A word whisper's BPE stores as one token: a frequent English word."""
+        return bool(word) and len(self.tokenizer.encode(" " + word)) == 1
+
     def solve(self, x: np.ndarray) -> str:
-        cands, score = self.candidates(x)
-        answer = choose_answer(cands)
+        """Answer for one decoded clip (``self.second``: optional cheaper second opinion)."""
+        second = self.second
+        instr_end, score = locate_instruction(x)
+        cands: List[Candidate] = []
+        others: Optional[List[Candidate]] = None
+        if score >= MIN_TEMPLATE_SCORE:
+            ref = reference_level(x, instr_end)
+            segs = find_word_segments(x, instr_end, ref, self.seg)[:MAX_SEGMENTS]
+            rel = relative_db(x, ref)
+            clips = [cut_segment(x, seg, rel, self.seg)[0] for seg in segs]
+            cands = self.decode(clips)
+            for seg, cand in zip(segs, cands):
+                cand.segment = seg
+            cands = [prefer_stem(c, self.is_common) for c in cands]
+            if second is not None and clips:
+                others = second.decode(clips)
+        answer = choose_answer(cands, others)
         if answer:
             return answer
         logger.info("audio: template score %.2f, no candidate; using fallback", score)
         return self.fallback(x)
 
 
-def choose_answer(cands: Sequence[Candidate]) -> str:
-    """Pick the one word to submit: the most confident single-word run wins."""
+def _plural_stem(word: str) -> Optional[str]:
+    if len(word) < 4 or not word.endswith("s") or word.endswith(("ss", "us", "is")):
+        return None
+    return word[:-1]
+
+
+def prefer_stem(cand: Candidate, is_common, margin: float = None) -> Candidate:
+    """'feelings' -> 'feeling' when background noise right after the word added an 's'.
+
+    Applies when the stem is a common word (one BPE token) and another beam hypothesis
+    spells exactly the stem with a log-prob within ``margin`` of the best one.
+    """
+    margin = STEM_MARGIN if margin is None else margin
+    stem = _plural_stem(cand.text) if " " not in cand.text else None
+    if not stem or margin <= 0 or not is_common(stem):
+        return cand
+    for text, logprob in cand.alternatives:
+        if text == stem and logprob >= cand.logprob - margin:
+            return Candidate(stem, logprob, cand.no_speech, cand.segment, 1,
+                             cand.alternatives)
+    return cand
+
+
+def choose_answer(cands: Sequence[Candidate],
+                  others: Optional[Sequence[Candidate]] = None) -> str:
+    """Pick the one word to submit.
+
+    ``others`` are the same runs decoded by a second model (index-aligned with ``cands``,
+    empty texts included). A single word both models agree on wins; otherwise the most
+    confident single-word run of the primary model.
+    """
+    if others is not None:
+        agreed = [c for c, o in zip(cands, others)
+                  if c.text and c.text == o.text and len(c.text.split()) == 1]
+        if agreed:
+            return max(agreed, key=lambda c: c.score).text
+    cands = [c for c in cands if c.text]
     if not cands:
         return ""
     best = max(cands, key=lambda c: c.score)
@@ -548,7 +602,11 @@ def get_solver() -> AudioSolver:
             if _solver is None:
                 logger.info("audio: loading faster-whisper model %s", MODEL_NAME)
                 try:
-                    _solver = AudioSolver()
+                    solver = AudioSolver()
+                    if SECOND_MODEL:
+                        logger.info("audio: loading second-opinion model %s", SECOND_MODEL)
+                        solver.second = AudioSolver(SECOND_MODEL, window_s=SECOND_WINDOW_S)
+                    _solver = solver
                 except Exception as exc:  # ImportError, download/IO errors, CTranslate2
                     raise UnsupportedProblem(
                         f"audio model {MODEL_NAME!r} could not be loaded: {exc}") from exc
