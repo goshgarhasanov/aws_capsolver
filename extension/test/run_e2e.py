@@ -326,10 +326,12 @@ def scenarios(context, args):
     # ---- General text solver: on by default (mocked service), many page layouts
     page = context.new_page()
     page.goto(f"{FIX}/generic/login")
-    got = wait_until(lambda: page.input_value("#verification_code") == "40719", 60)
+    got = wait_until(lambda: page.input_value("#verification_code") == "aB3dE", 60)
     mock = fixture_log()["mockapi"][-1]
     check("general text: on by default, solved (module common)", got and mock.get("module") == "common",
           json.dumps(mock))
+    check("general text: case-sensitive task (case=true), mixed case filled exactly",
+          got and mock.get("case") is True, f"{page.input_value('#verification_code')!r} {json.dumps(mock)}")
     page.close()
 
     def generic_variant(variant, selector, expect_fill=True):
@@ -339,7 +341,7 @@ def scenarios(context, args):
         read = (lambda: page.evaluate("document.getElementById('host').shadowRoot.getElementById('kod').value")) \
             if variant == "shadow" else (lambda: page.input_value(selector))
         if expect_fill:
-            got = wait_until(lambda: read() == "40719", 60)
+            got = wait_until(lambda: read() == "aB3dE", 60)
             check(f"general text [{variant}]: detected and filled", got, f"value={read()!r} badge={page_badge(page)}")
         else:
             time.sleep(5)
@@ -357,13 +359,29 @@ def scenarios(context, args):
     page = context.new_page()
     page.goto(f"{FIX}/generic/v?variant=cross")
     if args.grant_all_urls:
-        got = wait_until(lambda: page.input_value("#xin") == "40719", 60)
+        got = wait_until(lambda: page.input_value("#xin") == "aB3dE", 60)
         check("general text [cross]: read from a screenshot and filled", got,
               f"value={page.input_value('#xin')!r} badge={page_badge(page)}")
     else:
         got = wait_until(lambda: "CAPTURE" in ((page_badge(page) or ["", ""])[1]), 60)
         check("general text [cross]: detected, clear CAPTURE_DENIED without the grant", got,
               f"value={page.input_value('#xin')!r} badge={page_badge(page)}")
+    page.close()
+
+    # NopeCHA-demo layout: 12 iframes (src set by script), .captchapict + .captcha only
+    page = context.new_page()
+    page.goto(f"{FIX}/generic/nopecha?n=12")
+
+    def nopecha_filled():
+        vals = []
+        for fr in page.frames[1:]:
+            try:
+                vals.append(fr.evaluate("(document.querySelector('input.captcha') || {}).value || ''"))
+            except Exception:
+                vals.append("")
+        return vals
+    got = wait_until(lambda: (lambda v: len(v) == 12 and all(x == "aB3dE" for x in v))(nopecha_filled()), 120)
+    check("general text [nopecha-like 12 iframes]: every captcha filled", got, repr(nopecha_filled()))
     page.close()
 
     # switching the general solver off stops it live

@@ -31,6 +31,7 @@ AWS_SAMPLE = ROOT / "data" / "samples" / "problem_visual.json"
 AWS_ANSWER = [0, 2, 4, 6, 8]
 BLS_REAL = Path("/home/gg/projects/bls_capsolver/data/real")
 BLS_PL = Path("/home/gg/projects/BlsPolandBott_dev/temp")
+MOCK_TEXT_MIXED = "aB3dE"   # generic module: upper/lower case must reach the input unchanged
 MOCK_TEXT = "40719"
 
 LOG = {"verify": [], "bls_submit": [], "blspl_images": [], "mockapi": [], "blspl_submit": []}
@@ -185,6 +186,23 @@ root.innerHTML = '<p>Resimdeki kodu giriniz</p><img id="simg" src="/blspl/captch
 }
 
 
+# NopeCHA's text-captcha demo layout: many iframes whose src is set by a script, each with
+# <img class="captchapict"> and <input class="captcha"> and nothing else to go by
+NOPECHA_FRAME = """<!doctype html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;font-family:sans-serif"><img class="captchapict" src="/blspl/captcha.jpg?img={img}">
+<input class="captcha" type="text"></body></html>"""
+
+
+def nopecha_like_page(n, imgs):
+    frames = "".join("<iframe></iframe>" for _ in range(n))
+    srcs = json.dumps([f"/generic/nopecha_frame?img={html.escape(imgs[i % len(imgs)])}&i={i}" for i in range(n)])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>nopecha-like</title>
+<style>iframe {{ width: 240px; height: 110px; border: 1px solid #ccc; }}</style></head>
+<body><div id="parent">{frames}</div>
+<script>const s = {srcs}; document.querySelectorAll('#parent iframe').forEach((f, i) => f.src = s[i]);</script>
+</body></html>"""
+
+
 def generic_variant_page(variant, img, port):
     body = GENERIC_VARIANTS[variant].format(img=html.escape(img), port=port)
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>generic {variant}</title></head>
@@ -243,6 +261,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/generic/v" and q.get("variant") in GENERIC_VARIANTS:
             return self._send(200, generic_variant_page(q["variant"], q.get("img", "cap-br7bzbh49g8.jpg"),
                                                         self.server.server_address[1]))
+        if path == "/generic/nopecha":
+            imgs = sorted(p.name for p in BLS_PL.glob("*.jpg"))[:6] or ["cap-br7bzbh49g8.jpg"]
+            return self._send(200, nopecha_like_page(int(q.get("n", "12")), imgs))
+        if path == "/generic/nopecha_frame":
+            return self._send(200, NOPECHA_FRAME.format(img=html.escape(Path(q.get("img", "")).name)))
         if path == "/static/logo.jpg":
             return self._send(200, (BLS_PL / Path(q.get("img", "cap-br7bzbh49g8.jpg")).name).read_bytes(),
                               "image/jpeg")
@@ -300,13 +323,15 @@ class Handler(BaseHTTPRequestHandler):
             task = body.get("task") or {}
             with LOCK:
                 LOG["mockapi"].append({"type": task.get("type"), "module": task.get("module"),
+                                       "case": task.get("case"),
                                        "body_head": (task.get("body") or "")[:16],
                                        "body_len": len(task.get("body") or "")})
             if task.get("type") != "ImageToTextTask":
                 return self._json({"errorId": 1, "errorCode": "ERROR_TASK_NOT_SUPPORTED",
                                    "errorDescription": "mock only does ImageToTextTask"})
+            answer = MOCK_TEXT_MIXED if task.get("module") == "common" else MOCK_TEXT
             return self._json({"errorId": 0, "status": "ready", "taskId": "mock",
-                               "solution": {"text": MOCK_TEXT, "confidence": 0.97}})
+                               "solution": {"text": answer, "confidence": 0.97}})
         return self._send(404, "not found", "text/plain")
 
 

@@ -128,7 +128,8 @@ function buildTask(kind, raw) {
     case "blsText":
     case "text":
       if (!str(t.body, 4 * 1024 * 1024)) break;
-      return { type: TASK_TYPES[kind], body: t.body, module: TEXT_MODULES[kind] };
+      // case: true = case-sensitive (the answer keeps upper/lower case exactly as read)
+      return { type: TASK_TYPES[kind], body: t.body, module: TEXT_MODULES[kind], case: true };
     case "awsToken": {
       if (!str(t.websiteURL, 2048) || !/^https?:\/\//i.test(t.websiteURL)) break;
       const out = { type: TASK_TYPES.awsToken, websiteURL: t.websiteURL };

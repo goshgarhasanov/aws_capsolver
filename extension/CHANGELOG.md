@@ -18,10 +18,13 @@ All notable changes to the Captchosa browser extension. Versions follow
 
 ### Changed
 - The input shows *Solving…* (localised) while the answer is on its way.
+- Text tasks are sent with `case: true`: the answer keeps upper/lower case exactly as read.
 
 ### Tests
 - New end-to-end pages: label-only, canvas, shadow DOM + Turkish wording, a negative login page,
-  a cross-origin picture (`run_e2e.py --grant-all-urls` covers the screenshot path).
+  a cross-origin picture (`run_e2e.py --grant-all-urls` covers the screenshot path), a
+  NopeCHA-demo-like page (12 script-filled iframes with `.captchapict` + `.captcha` only), and a
+  mixed-case answer that must reach the input unchanged.
 
 ## 1.0.1 – 2026-11-21
 
