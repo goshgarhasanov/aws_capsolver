@@ -96,7 +96,7 @@ STRINGS = {
     "offline": ("Offline", "Bağlantı yok", "Bağlantı yoxdur", "Нет связи"),
     "checking": ("Checking…", "Kontrol ediliyor…", "Yoxlanılır…", "Проверка…"),
     "notConfigured": ("Not configured", "Ayarlanmadı", "Qurulmayıb", "Не настроено"),
-    "balance": ("Balance", "Bakiye", "Balans", "Баланс"),
+    "balance": ("Tokens", "Token", "Token", "Токены"),
     "unlimited": ("unlimited", "sınırsız", "limitsiz", "без лимита"),
     "version": ("Version", "Sürüm", "Versiya", "Версия"),
     "activity": ("Recent activity", "Son işlemler", "Son fəaliyyət", "Последние действия"),
