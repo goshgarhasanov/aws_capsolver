@@ -2,23 +2,31 @@
 """Label and benchmark the audio CAPTCHA solver (aws_capsolver.vision.audio).
 
 Subcommands
-  transcribe --model M     run model M on every foreground word segment of every clip and
-                           cache the result in data/audio/runs/<M>.json
-  label --models A B C     build data/audio/labels.json: a segment's word is accepted when
-                           at least --min-agree of the given (cached) models produce the
-                           same single word; clips with < 2 accepted words go to review
-  eval --model M           run the production solver with model M over the frozen held-out
-                           split and report exact-match accuracy (answer in the clip's
-                           label set) and latency
+  transcribe --model M [--window W] [--split S]
+                           decode every foreground word segment of every clip with model M
+                           and cache it in data/audio/runs/<M>[@<W>s].json (W=0: stock
+                           faster-whisper pipeline; W>0: the solver's batched W-second path)
+  label --models A B [--test-models C D E]
+                           build data/audio/labels.json: a segment's word is accepted when
+                           at least --min-agree runs produce the same single word; the
+                           held-out split can use its own voters (exclude the production
+                           model there so the test labels are not biased towards it);
+                           data/audio/manual.json {clip: [words]} overrides
+  eval --model M [--window W] --split test
+                           run the production solver over a split and report exact-match
+                           accuracy (answer in the clip's label set) and latency
   show <clip-id>           print everything known about one clip
 
 The held-out split is frozen by hashing the clip id (sha1(id) % 100 < HELD_OUT_PCT), so
 newly collected clips fall deterministically into one side.
 
-Usage:
-    .venv/bin/python tools/bench_audio.py transcribe --model large-v3
-    .venv/bin/python tools/bench_audio.py label --models large-v3 medium.en distil-large-v3
-    .venv/bin/python tools/bench_audio.py eval --model small.en --split test
+Reproduce the reported numbers:
+    for m in large-v3 distil-large-v3; do
+        .venv/bin/python tools/bench_audio.py transcribe --model $m --window 30; done
+    .venv/bin/python tools/bench_audio.py transcribe --model small.en
+    .venv/bin/python tools/bench_audio.py label \
+        --models large-v3@30s distil-large-v3@30s small.en
+    .venv/bin/python tools/bench_audio.py eval --model medium.en --window 20 --split test
 """
 from __future__ import annotations
 
@@ -106,36 +114,50 @@ def cmd_transcribe(args) -> None:
     out_path.write_text(json.dumps(done, indent=1))
 
 
+def _load_runs(names):
+    return {m: json.loads((RUNS / f"{m}.json").read_text()) for m in names}
+
+
 def cmd_label(args) -> None:
-    runs = {m: json.loads((RUNS / f"{m}.json").read_text()) for m in args.models}
-    manual = json.loads((DATA / "manual.json").read_text()) if (DATA / "manual.json").exists() \
-        else {}
+    """Majority vote per segment; the held-out split may use its own (stronger) model set
+    that excludes the production model, so the test labels are not biased towards it."""
+    dev_runs = _load_runs(args.models)
+    test_runs = _load_runs(args.test_models) if args.test_models else dev_runs
+    manual_path = DATA / "manual.json"
+    manual = json.loads(manual_path.read_text()) if manual_path.exists() else {}
     labels, review = {}, []
     for cid in clip_ids():
-        if not all(cid in r for r in runs.values()):
+        split = split_of(cid)
+        runs = {m: r for m, r in (test_runs if split == "test" else dev_runs).items()
+                if cid in r}
+        if len(runs) < args.min_agree:
             continue
-        nseg = {len(r[cid]["segments"]) for r in runs.values()}
+        nseg = max(len(r[cid]["segments"]) for r in runs.values())
         words = set()
-        for k in range(max(nseg)):
-            votes = Counter(A.normalise(r[cid]["segments"][k]["text"]) for r in runs.values()
-                            if k < len(r[cid]["segments"]))
+        for k in range(nseg):
+            votes = Counter(A.collapse_repeats(A.normalise(r[cid]["segments"][k]["text"]))
+                            for r in runs.values() if k < len(r[cid]["segments"]))
             text, n = votes.most_common(1)[0]
             if n >= args.min_agree and len(text.split()) == 1:
                 words.add(text)
+        how = "agreement"
         if cid in manual:
-            words = set(manual[cid])
-        labels[cid] = {"words": sorted(words), "split": split_of(cid),
-                       "how": "manual" if cid in manual else "agreement"}
-        if len(words) < 2:
+            words, how = set(manual[cid]), "manual"
+        labels[cid] = {"words": sorted(words), "split": split, "how": how,
+                       "models": sorted(runs)}
+        if len(words) < 2 and how != "manual":
             review.append(cid)
     LABELS.write_text(json.dumps(labels, indent=1))
-    n = len(labels)
-    print(f"labelled {n} clips; {n - len(review)} with 2 agreed words; "
-          f"{len(review)} need review; usable (>=1 word): "
-          f"{sum(1 for v in labels.values() if v['words'])}")
+    for split in ("dev", "test"):
+        part = {c: v for c, v in labels.items() if v["split"] == split}
+        print(f"{split}: {len(part)} clips, {sum(len(v['words']) == 2 for v in part.values())} "
+              f"with 2 words, {sum(len(v['words']) == 1 for v in part.values())} with 1, "
+              f"{sum(not v['words'] for v in part.values())} unlabelled, "
+              f"{sum(v['how'] == 'manual' for v in part.values())} manual")
     for cid in review:
-        print("REVIEW", cid, labels[cid]["words"],
-              {m: [s["text"] for s in r[cid]["segments"]] for m, r in runs.items()})
+        runs = test_runs if labels[cid]["split"] == "test" else dev_runs
+        print("REVIEW", labels[cid]["split"], cid, labels[cid]["words"],
+              {m: [s["text"] for s in r[cid]["segments"]] for m, r in runs.items() if cid in r})
 
 
 def cmd_eval(args) -> None:
@@ -187,7 +209,8 @@ def main() -> None:
     p.add_argument("--window", type=float, default=0.0,
                    help="encoder window in seconds; 0 = stock faster-whisper pipeline")
     p = sub.add_parser("label")
-    p.add_argument("--models", nargs="+", required=True)
+    p.add_argument("--models", nargs="+", required=True, help="runs voting on dev clips")
+    p.add_argument("--test-models", nargs="+", help="runs voting on held-out clips")
     p.add_argument("--min-agree", type=int, default=2)
     p = sub.add_parser("eval")
     p.add_argument("--model", default=A.MODEL_NAME)

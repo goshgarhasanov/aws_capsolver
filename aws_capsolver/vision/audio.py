@@ -26,7 +26,7 @@ Model download and offline use
 The CTranslate2 model is fetched once from the Hugging Face hub (Systran/faster-whisper-*)
 into the standard cache (~/.cache/huggingface/hub, or $HF_HOME). Pre-fetch it with
 
-    python -c "from faster_whisper.utils import download_model as d; d('small.en')"
+    python -c "from faster_whisper.utils import download_model as d; d('medium.en')"
 
 and run with HF_HUB_OFFLINE=1 afterwards. AWS_CAPSOLVER_AUDIO_MODEL accepts a model size
 name (tiny.en ... large-v3) or a path to a local CTranslate2 model directory;
@@ -60,7 +60,7 @@ MAX_CLIP_BYTES = 2_000_000    # real clips are ~55 kB
 MAX_SECONDS = 30.0
 DECODE_TIMEOUT_S = 5.0
 
-MODEL_NAME = os.environ.get("AWS_CAPSOLVER_AUDIO_MODEL", "small.en")
+MODEL_NAME = os.environ.get("AWS_CAPSOLVER_AUDIO_MODEL", "medium.en")
 CPU_THREADS = int(os.environ.get("AWS_CAPSOLVER_AUDIO_THREADS", "8"))
 
 # dB envelope (10 ms frames, relative to its max) of the spoken instruction
@@ -85,8 +85,10 @@ _INSTRUCTION_END = 254 * HOP  # samples from template start to the end of "me"
 MIN_TEMPLATE_SCORE = 0.6
 
 PAD_S = 0.08
-WINDOW_S = float(os.environ.get("AWS_CAPSOLVER_AUDIO_WINDOW", "4"))  # encoder window (s)
+WINDOW_S = float(os.environ.get("AWS_CAPSOLVER_AUDIO_WINDOW", "20"))  # encoder window (s)
 MAX_SEGMENTS = 4
+MULTI_WORD_PENALTY = 0.7  # a run decoded as several words has background speech in it
+TOKEN_PENALTY = 0.3       # per extra BPE token: common words are 1-2 tokens (tuned on dev)
 SIL_S = 0.4
 
 
@@ -381,11 +383,13 @@ class Candidate:
     logprob: float      # mean token log-probability of the decoded text
     no_speech: float
     segment: Optional[Segment] = None
+    n_tokens: int = 1   # BPE tokens of the words; mis-heard non-words split into many
 
     @property
     def score(self) -> float:
-        penalty = 0.0 if len(self.text.split()) == 1 else 0.7
-        return self.logprob - penalty - 0.5 * self.no_speech
+        penalty = 0.0 if len(self.text.split()) == 1 else MULTI_WORD_PENALTY
+        return (self.logprob - penalty - 0.5 * self.no_speech
+                - TOKEN_PENALTY * max(0, self.n_tokens - 1))
 
 
 class AudioSolver:
@@ -444,8 +448,12 @@ class AudioSolver:
             tokens = [t for t in r.sequences_ids[0] if t < self.tokenizer.eot]
             text = collapse_repeats(normalise(self.tokenizer.decode(tokens)))
             avg = r.scores[0] * len(tokens) / (len(tokens) + 1) if tokens else -9.0
-            out.append(Candidate(text, float(avg), float(r.no_speech_prob)))
+            out.append(Candidate(text, float(avg), float(r.no_speech_prob),
+                                 n_tokens=self._count_tokens(text)))
         return out
+
+    def _count_tokens(self, text: str) -> int:
+        return sum(len(self.tokenizer.encode(" " + w)) for w in text.split()) or 1
 
     def _decode(self, clip: np.ndarray) -> Candidate:
         """Decode one clip with the stock 30 s faster-whisper pipeline (reference path)."""
@@ -462,7 +470,7 @@ class AudioSolver:
         text = normalise(" ".join(s.text for s in segments))
         logprob = float(np.mean([s.avg_logprob for s in segments]))
         no_speech = float(max(s.no_speech_prob for s in segments))
-        return Candidate(text, logprob, no_speech)
+        return Candidate(text, logprob, no_speech, n_tokens=self._count_tokens(text))
 
     def candidates(self, x: np.ndarray) -> Tuple[List[Candidate], float]:
         """Transcribe every foreground word run; returns (candidates, template score)."""
