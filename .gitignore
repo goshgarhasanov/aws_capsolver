@@ -15,3 +15,4 @@ weights/*
 keys.json
 .env
 !weights/bls_poland_ocr.pt
+!weights/general_ocr*
