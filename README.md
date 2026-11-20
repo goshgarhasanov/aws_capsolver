@@ -1,11 +1,12 @@
-# aws_capsolver
+# captchosa (package `aws_capsolver`)
 
-A self-hosted AWS WAF solving service that speaks the CapSolver API. A client that already
+A self-hosted AWS WAF and BLS captcha solving service that speaks the CapSolver API. A client that already
 talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 
 - `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess`: solve a site's AWS WAF (PoW challenge,
   then the visual or audio CAPTCHA when needed) and return the `aws-waf-token` cookie.
 - `AwsWafClassification`: answer one already-fetched CAPTCHA problem (grid tiles).
+- `BlsClassification`: the BLS "select all boxes with number NNN" grid (bls_capsolver CNN).
 - `getBalance`, `getTaskResult`, `/health`.
 
 Contents: [Layout](#layout) - [Quick start](#quick-start) - [API reference](#api-reference) -
@@ -188,6 +189,35 @@ Toycar problem (`question` = `aws:toycarcity:carcity`, `images` = one image):
 ```
 No toycar problem has been observed on the sampled endpoints, so this currently answers
 `ERROR_CAPTCHA_UNSOLVABLE`.
+
+### POST /createTask - BlsClassification (synchronous)
+
+The BLS grid captcha (turkey.blsspainglobal.com and other BLS sites): "select all boxes
+with number NNN". Send the 9 **visible** tiles in page order (BLS also renders hidden
+decoy tiles; leave them out) and the target from `question` (`bls:grid:<NNN>`) or `target`.
+
+```bash
+curl -s localhost:8790/createTask -H 'content-type: application/json' -d '{"clientKey":"K","task":{
+  "type":"BlsClassification","question":"bls:grid:748","images":["iVBOR...", "..."]}}'
+```
+```json
+{"errorId": 0, "taskId": "...", "status": "ready",
+ "solution": {"objects": [1, 3, 4], "readings": ["728", "748", "658", "748", "748", "986", "351", "860", "498"]}}
+```
+`objects` are the tile indices to click; `readings` is what the model read on each tile
+(useful for logging). Errors: `ERROR_INVALID_TASK_DATA` (target not 3 digits, not exactly 9
+tiles, undecodable tile), `ERROR_CAPTCHA_UNSOLVABLE` (no tile matches),
+`ERROR_TASK_NOT_SUPPORTED` (bls_capsolver not installed). It shares the classification
+queue and limits with `AwsWafClassification`.
+
+The model is the separate private project `goshgarhasanov/bls_capsolver`, installed into
+the same environment:
+```bash
+git clone https://github.com/goshgarhasanov/bls_capsolver ../bls_capsolver
+.venv/bin/pip install --no-deps -e ../bls_capsolver
+```
+The decision threshold defaults to 0.3 (as in the BlsSpainTurkey bot) and can be changed
+with `BLS_CAPSOLVER_THRESHOLD`; `BLS_CAPSOLVER_WEIGHTS` points at another checkpoint.
 
 ### POST /getBalance
 

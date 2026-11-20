@@ -12,9 +12,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, vision_bridge
+from . import __version__, bls_bridge, vision_bridge
 from .config import KeyStore, Settings, UsageStore
-from .tasks import TASK_CLASSIFY, Task, TaskManager
+from .tasks import CLASSIFY_TYPES, Task, TaskManager
 from .waf import pow as powlib
 from .waf.errors import (ERROR_INVALID_TASK_DATA, ERROR_KEY_DENIED_ACCESS,
                          ERROR_SERVICE_UNAVAILABLE, SolverError)
@@ -95,9 +95,11 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
         if settings.warmup:
             threading.Thread(target=vision_bridge.warmup, name="vision-warmup",
                              daemon=True).start()
-        logger.info("aws_capsolver %s ready (workers=%d, vision=%s, ssrf_guard=%s)",
+            threading.Thread(target=bls_bridge.warmup, name="bls-warmup",
+                             daemon=True).start()
+        logger.info("aws_capsolver %s ready (workers=%d, vision=%s, bls=%s, ssrf_guard=%s)",
                     __version__, settings.workers, vision_bridge.available(),
-                    not settings.allow_private)
+                    bls_bridge.available(), not settings.allow_private)
         try:
             yield
         finally:
@@ -138,7 +140,7 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
         if "task" not in body:
             raise SolverError(ERROR_INVALID_TASK_DATA, "task is required")
         payload = body.get("task")
-        if isinstance(payload, dict) and payload.get("type") == TASK_CLASSIFY:
+        if isinstance(payload, dict) and payload.get("type") in CLASSIFY_TYPES:
             task = await _classify(client_key, payload)
         else:
             # validation + queueing only; it still touches SQLite, so keep it off the loop

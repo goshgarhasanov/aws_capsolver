@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import vision_bridge
+from . import bls_bridge, vision_bridge
 from .config import Settings, UsageStore
 from .waf.errors import (ALL_CODES, ERROR_CAPTCHA_UNSOLVABLE, ERROR_INVALID_TASK_DATA,
                          ERROR_NO_SLOT_AVAILABLE, ERROR_SERVICE_UNAVAILABLE,
@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 TASK_WAF = "AntiAwsWafTask"
 TASK_WAF_PROXYLESS = "AntiAwsWafTaskProxyLess"
 TASK_CLASSIFY = "AwsWafClassification"
-SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY)
+TASK_BLS = "BlsClassification"
+CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS)
+SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS)
+BLS_GRID_TILES = 9
 MAX_IMAGES = 16
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_URL_LENGTH = 4096
@@ -123,8 +126,34 @@ def _decode_image(value: Any, index: int) -> bytes:
     return data
 
 
+def parse_bls(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
+    """
+    Validate a BlsClassification payload -> ("bls", target, decoded images).
+
+    The target comes from `question` ("bls:grid:748") or `target` ("748"); `images`
+    are the 9 grid tiles in page order (base64 or data: URLs).
+    """
+    question = _opt_str(task, "question")
+    target = _opt_str(task, "target", 16)
+    if question:
+        parts = question.split(":", 2)
+        if len(parts) != 3 or parts[0] != "bls" or parts[1] != "grid":
+            raise SolverError(ERROR_INVALID_TASK_DATA, "question must look like bls:grid:<NNN>")
+        target = parts[2]
+    target = (target or "").strip()
+    if len(target) != 3 or not target.isdigit():
+        raise SolverError(ERROR_INVALID_TASK_DATA, "the BLS target must be a 3-digit number")
+    images = task.get("images")
+    if not isinstance(images, list) or len(images) != BLS_GRID_TILES:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          f"images[] must hold the {BLS_GRID_TILES} grid tiles")
+    return "bls", target, [_decode_image(v, i) for i, v in enumerate(images)]
+
+
 def parse_classification(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
-    """Validate an AwsWafClassification payload -> (family, target, decoded images)."""
+    """Validate a classification payload -> (family, target, decoded images)."""
+    if task.get("type") == TASK_BLS:
+        return parse_bls(task)
     question = _opt_str(task, "question")
     images = task.get("images")
     if not question or not isinstance(images, list) or not images:
@@ -149,6 +178,8 @@ def classify(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_classification(family: str, target: str, decoded: List[bytes]) -> Dict[str, Any]:
     """The vision call for a validated classification."""
+    if family == "bls":
+        return _run_bls(target, decoded)
     try:
         if family == "grid":
             objects = sorted({int(i) for i in vision_bridge.classify_grid(decoded, target)})
@@ -166,6 +197,19 @@ def run_classification(family: str, target: str, decoded: List[bytes]) -> Dict[s
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE,
                           f"bad solver output ({exc.__class__.__name__})") from exc
     raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"question family {family!r} is not supported")
+
+
+def _run_bls(target: str, decoded: List[bytes]) -> Dict[str, Any]:
+    """BLS grid: indices to click plus what the model read on every tile."""
+    try:
+        objects, readings = bls_bridge.match(decoded, target)
+    except bls_bridge.BlsInvalidInput as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, str(exc)) from exc
+    except bls_bridge.BlsUnavailable as exc:
+        raise SolverError(ERROR_TASK_NOT_SUPPORTED, str(exc)) from exc
+    if not objects:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"no tile shows {target}")
+    return {"objects": objects, "readings": readings}
 
 
 class TaskManager:
@@ -294,7 +338,7 @@ class TaskManager:
             shown = task_type if isinstance(task_type, str) else type(task_type).__name__
             raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"task type {shown!r} is not supported")
 
-        if task_type == TASK_CLASSIFY:
+        if task_type in CLASSIFY_TYPES:
             return self._create_classification(client_key, payload)
 
         request = build_solve_request(payload)  # validate before queueing
@@ -337,7 +381,8 @@ class TaskManager:
                 raise SolverError(ERROR_NO_SLOT_AVAILABLE, "classification queue is full")
             self._classify_waiting += 1  # reserve the slot before registering
         try:
-            task = self._register(client_key, TASK_CLASSIFY)
+            task_type = TASK_BLS if payload.get("type") == TASK_BLS else TASK_CLASSIFY
+            task = self._register(client_key, task_type)
         except BaseException:
             with self._lock:
                 self._classify_waiting -= 1
@@ -406,9 +451,9 @@ class TaskManager:
             active = [t for t in self._tasks.values() if t.status in ("idle", "processing")]
             return {
                 "tasks_active": len(active),
-                "waf_queued": sum(1 for t in active if t.type != TASK_CLASSIFY
+                "waf_queued": sum(1 for t in active if t.type not in CLASSIFY_TYPES
                                   and t.status == "idle"),
-                "waf_running": sum(1 for t in active if t.type != TASK_CLASSIFY
+                "waf_running": sum(1 for t in active if t.type not in CLASSIFY_TYPES
                                    and t.status == "processing"),
                 "classify_queued": self._classify_waiting,
                 "classify_running": self._classify_running,
