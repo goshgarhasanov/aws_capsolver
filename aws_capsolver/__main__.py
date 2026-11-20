@@ -1,4 +1,5 @@
-"""Command line: `serve` runs the API, `solve` solves one URL and prints the token."""
+"""Command line: `serve` runs the API, `solve` solves one URL and prints the token,
+`billing` manages token balances (top-ups after a payment, history, prices)."""
 
 import argparse
 import json
@@ -27,8 +28,19 @@ def main(argv=None) -> int:
     solve.add_argument("url")
     solve.add_argument("--proxy", help="http://user:pass@host:port or scheme:host:port:user:pass")
     solve.add_argument("--user-agent")
+    bill = sub.add_parser("billing", help="token balances: topup / balance / history / prices / accounts")
+    bill.add_argument("action", choices=["topup", "balance", "history", "prices", "accounts"])
+    bill.add_argument("--key", help="client key")
+    amount = bill.add_mutually_exclusive_group()
+    amount.add_argument("--usd", type=float, help="package bought, converted at tokens_per_usd")
+    amount.add_argument("--tokens", type=int, help="exact tokens (negative = correction)")
+    bill.add_argument("--note", default="", help="free text stored in the ledger (e.g. payment id)")
+    bill.add_argument("--limit", type=int, default=30)
     args = parser.parse_args(argv)
     _logging(args.log_level)
+
+    if args.cmd == "billing":
+        return _billing(args)
 
     if args.cmd == "serve":
         import uvicorn
@@ -67,6 +79,47 @@ def main(argv=None) -> int:
                       "captcha": outcome.used_captcha, "rounds": outcome.captcha_rounds,
                       "seconds": round(time.monotonic() - started, 2)}))
     return 0
+
+
+def _billing(args) -> int:
+    from .config import KeyStore, Settings
+    from .server import make_billing
+    settings = Settings.from_env()
+    settings.billing = True
+    keys = KeyStore(settings)
+    billing = make_billing(settings, keys)
+    try:
+        if args.action == "prices":
+            print(json.dumps({"tokens_per_usd": billing.tokens_per_usd, "prices": billing.prices}, indent=1))
+            return 0
+        if args.action == "accounts":
+            print(json.dumps(billing.accounts(), indent=1))
+            return 0
+        if not args.key:
+            print("--key is required", file=sys.stderr)
+            return 2
+        if keys.lookup(args.key) is None:
+            print(f"unknown client key (add it to {settings.keys_file} first)", file=sys.stderr)
+            return 2
+        if args.action == "topup":
+            if args.usd is None and args.tokens is None:
+                print("give --usd or --tokens", file=sys.stderr)
+                return 2
+            try:
+                new = billing.topup(args.key, tokens=args.tokens, usd=args.usd, note=args.note)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print(json.dumps({"key": args.key, "tokens": new}))
+        elif args.action == "balance":
+            tokens = billing.balance(args.key)
+            print(json.dumps({"key": args.key, "tokens": tokens,
+                              "usd": round(tokens / billing.tokens_per_usd, 4)}))
+        else:
+            print(json.dumps(billing.history(args.key, args.limit), indent=1))
+        return 0
+    finally:
+        billing.close()
 
 
 if __name__ == "__main__":

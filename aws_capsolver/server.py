@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, bls_bridge, text, vision_bridge
+from .billing import Billing, load_pricing
 from .config import KeyStore, Settings, UsageStore
 from .tasks import CLASSIFY_TYPES, Task, TaskManager
 from .waf import pow as powlib
@@ -77,13 +78,27 @@ def _text_modules() -> Dict[str, bool]:
     return {module: text.available(module) for module in text.MODULES}
 
 
+def make_billing(settings: Settings, keys: KeyStore) -> Optional[Billing]:
+    """The token ledger (in the usage database file), or None when billing is off."""
+    if not settings.billing:
+        return None
+    prices, per_usd = load_pricing(settings.pricing_file)
+    return Billing(settings.usage_db, prices, per_usd,
+                   opening_grant=lambda key: int(keys.balance(key)))
+
+
 def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManager] = None,
-               keys: Optional[KeyStore] = None, usage: Optional[UsageStore] = None) -> FastAPI:
+               keys: Optional[KeyStore] = None, usage: Optional[UsageStore] = None,
+               billing: Optional[Billing] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     owns_usage = usage is None
     keys = keys or KeyStore(settings)
     usage = usage or UsageStore(settings.usage_db)
-    manager = manager or TaskManager(settings, usage)
+    if manager is not None:
+        billing = billing if billing is not None else manager.billing
+    elif billing is None:
+        billing = make_billing(settings, keys)
+    manager = manager or TaskManager(settings, usage, billing=billing)
     stop = threading.Event()
 
     def janitor() -> None:
@@ -115,6 +130,8 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
             janitor_thread.join(timeout=1)
             if owns_usage:
                 usage.close()
+                if billing is not None:
+                    billing.close()
 
     app = FastAPI(title="aws_capsolver", version=__version__, lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -181,9 +198,16 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
     @app.post("/getBalance")
     async def get_balance(request: Request) -> JSONResponse:
         body, client_key = await _authed_body(request)
-        balance = keys.balance(client_key)
         stats = await run_in_threadpool(usage.stats, client_key)
-        return JSONResponse({"errorId": 0, "balance": balance, "packages": [], "usage": stats})
+        if billing is None:
+            balance = keys.balance(client_key)
+            return JSONResponse({"errorId": 0, "balance": balance, "packages": [], "usage": stats})
+        tokens = await run_in_threadpool(billing.balance, client_key)
+        # "balance" stays a number for CapSolver clients; here it counts tokens
+        return JSONResponse({"errorId": 0, "balance": tokens, "tokens": tokens,
+                             "balanceUsd": round(tokens / billing.tokens_per_usd, 4),
+                             "tokensPerUsd": billing.tokens_per_usd, "prices": billing.prices,
+                             "packages": [], "usage": stats})
 
     @app.get("/health")
     async def health() -> Dict[str, Any]:

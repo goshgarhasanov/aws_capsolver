@@ -278,12 +278,51 @@ is loaded at startup.
 curl -s localhost:8790/getBalance -d '{"clientKey":"MY-KEY"}'
 ```
 ```json
-{"errorId": 0, "balance": 1000.0, "packages": [],
+{"errorId": 0, "balance": 9850, "tokens": 9850, "balanceUsd": 9.85, "tokensPerUsd": 1000,
+ "prices": {"AntiAwsWafTask": 30, "AntiAwsWafTaskProxyLess": 30, "AwsWafClassification": 10,
+            "BlsClassification": 5, "ImageToTextTask": 2},
+ "packages": [],
  "usage": {"AntiAwsWafTask": {"created": 3, "solved": 3, "failed": 0},
-           "AwsWafClassification": {"created": 10, "solved": 10, "failed": 0}}}
+           "AwsWafClassification": {"created": 6, "solved": 6, "failed": 0}}}
 ```
-The service takes no payments; `balance` is the static value from `keys.json`
-(default 1000).
+`balance` (= `tokens`) is the key's token balance; see [Tokens and billing](#tokens-and-billing).
+With `AWSCS_BILLING=0` it is the static `keys.json` value instead.
+
+### Tokens and billing
+
+Every key holds **tokens**; tokens are sold in packages (`tokens_per_usd`, default 1000:
+**$10 = 10,000 tokens**) and every solved task costs tokens according to its type:
+
+| task | tokens per solve (default) |
+|---|---|
+| `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess` | 30 |
+| `AwsWafClassification` | 10 |
+| `BlsClassification` | 5 |
+| `ImageToTextTask` | 2 (a module may have its own price, e.g. `"ImageToTextTask:bls_poland": 1`) |
+
+* The price is **reserved when the task is accepted** (concurrent tasks cannot overdraw a
+  key) and **refunded automatically when the task fails**, times out or is cancelled - only
+  solved tasks are paid for. Without enough tokens `createTask` answers
+  `ERROR_ZERO_BALANCE` before any work is done.
+* A key seen for the first time starts with its `keys.json` `"balance"` (or
+  `AWSCS_DEFAULT_BALANCE`, default 1000; set it to `0` when you sell tokens) as an
+  opening grant; after that the ledger is the only source of truth.
+* Prices and the package rate come from `pricing.json` (optional, `AWSCS_PRICING_FILE`):
+  `{"prices": {"AwsWafClassification": 12}, "tokens_per_usd": 1000}` - unspecified task
+  types keep their defaults.
+* Every movement (opening grant, top-up, charge, refund, correction) is an append-only
+  ledger row in the usage database (SQLite, WAL).
+
+Operator commands (the service takes no payments itself - credit a key after a payment):
+
+```bash
+python -m aws_capsolver billing topup   --key MY-KEY --usd 10 --note "stripe pi_123"  # +10,000 tokens
+python -m aws_capsolver billing topup   --key MY-KEY --tokens -500 --note correction
+python -m aws_capsolver billing balance --key MY-KEY
+python -m aws_capsolver billing history --key MY-KEY --limit 20
+python -m aws_capsolver billing prices
+python -m aws_capsolver billing accounts
+```
 
 ### GET /health
 
@@ -313,6 +352,7 @@ healthcheck.
 | `ERROR_PROXY_BANNED` | task result | a WAF endpoint answered HTTP 403 / 429 through the proxy (the proxy IP is blocked or rate limited) |
 | `ERROR_SITE_UNREACHABLE` | task result | DNS failure, connection or TLS error (without a proxy), too many redirects, oversized or unexpected reply from the site or the WAF endpoints |
 | `ERROR_TASK_TIMEOUT` | task result / classification | the task exceeded `AWSCS_TASK_TIMEOUT`, a network call timed out, or classification exceeded `AWSCS_CLASSIFY_TIMEOUT` |
+| `ERROR_ZERO_BALANCE` | createTask | the key has fewer tokens than the task's price (nothing is charged) |
 | `ERROR_NO_SLOT_AVAILABLE` | createTask | `AWSCS_MAX_PENDING` tasks are already queued or running, or the synchronous (classification / text) runners and queue are full; retry later |
 | `ERROR_SERVICE_UNAVAILABLE` | createTask / any | the service is shutting down; with HTTP 500, an unexpected internal error |
 
@@ -328,6 +368,7 @@ Example of each shape:
 {"errorId": 1, "errorCode": "ERROR_PROXY_BANNED", "errorDescription": "...", "taskId": "...", "status": "failed"}
 {"errorId": 1, "errorCode": "ERROR_SITE_UNREACHABLE", "errorDescription": "website: connection failed", "taskId": "...", "status": "failed"}
 {"errorId": 1, "errorCode": "ERROR_TASK_TIMEOUT", "errorDescription": "task exceeded the time limit", "taskId": "...", "status": "failed"}
+{"errorId": 1, "errorCode": "ERROR_ZERO_BALANCE", "errorDescription": "not enough tokens: balance 4, this task costs 10"}
 {"errorId": 1, "errorCode": "ERROR_NO_SLOT_AVAILABLE", "errorDescription": "too many tasks in progress"}
 {"errorId": 1, "errorCode": "ERROR_SERVICE_UNAVAILABLE", "errorDescription": "service is shutting down"}
 ```
@@ -342,7 +383,10 @@ when it changes):
 
 | variable | default | meaning |
 |---|---|---|
-| `AWSCS_KEYS_FILE` | `keys.json` | client keys, either `["k1"]` or `{"k1": {"name": "bot-a", "balance": 10}}` |
+| `AWSCS_KEYS_FILE` | `keys.json` | client keys, either `["k1"]` or `{"k1": {"name": "bot-a", "balance": 10}}` (`balance` = opening token grant) |
+| `AWSCS_BILLING` | `1` | token accounting: price per task, refund on failure, `ERROR_ZERO_BALANCE` |
+| `AWSCS_PRICING_FILE` | `pricing.json` | optional prices / `tokens_per_usd` |
+| `AWSCS_DEFAULT_BALANCE` | `1000` | opening tokens of a key without `"balance"` (use `0` when selling tokens) |
 | `AWSCS_KEYS` | | comma-separated extra keys |
 | `AWSCS_OPEN_ACCESS` | `0` | accept any key (local dev only; same as `serve --open`) |
 | `AWSCS_USAGE_DB` | `data/usage.db` | SQLite per-key counters |
@@ -511,7 +555,8 @@ add instances. Re-measure on the production host with `tools/loadtest.py`.
   `AWSCS_TASK_TIMEOUT`; it stops at its next deadline check.
 - Tasks live in memory: a restart forgets every pending and finished task.
 - `toycarcity` problems are not supported (no samples observed).
-- No TLS, rate limiting or billing; `balance` is a static number.
+- No TLS or rate limiting; billing is a token ledger only - payments are credited by the
+  operator (`billing topup`), there is no payment gateway.
 
 ## Retraining the models
 

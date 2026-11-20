@@ -16,9 +16,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from . import bls_bridge, text, vision_bridge
+from .billing import BillingError, InsufficientTokens
 from .config import Settings, UsageStore
 from .waf.errors import (ALL_CODES, ERROR_CAPTCHA_UNSOLVABLE, ERROR_INVALID_TASK_DATA,
-                         ERROR_NO_SLOT_AVAILABLE, ERROR_SERVICE_UNAVAILABLE,
+                         ERROR_NO_SLOT_AVAILABLE, ERROR_SERVICE_UNAVAILABLE, ERROR_ZERO_BALANCE,
                          ERROR_TASK_NOT_SUPPORTED, ERROR_TASK_TIMEOUT, ERROR_TASKID_INVALID,
                          SolverError)
 from .waf.http import parse_proxy, redact
@@ -305,9 +306,10 @@ class TaskManager:
     """
 
     def __init__(self, settings: Settings, usage: UsageStore,
-                 solver: Callable = solve_website):
+                 solver: Callable = solve_website, billing=None):
         self.settings = settings
         self.usage = usage
+        self.billing = billing  # aws_capsolver.billing.Billing or None (no token accounting)
         self._solver = solver
         self._tasks: Dict[str, Task] = {}
         self._lock = threading.Lock()
@@ -331,18 +333,29 @@ class TaskManager:
         return self._cancel.is_set()
 
     # registry ---------------------------------------------------------------
-    def _register(self, client_key: str, task_type: str) -> Task:
+    def _register(self, client_key: str, task_type: str, module: Optional[str] = None) -> Task:
         task = Task(id=str(uuid.uuid4()), client_key=client_key, type=task_type)
+        if self.billing is not None:
+            # reserve the price up front: concurrent tasks can never overdraw a key
+            try:
+                self.billing.charge(client_key, task_type, task.id, module)
+            except InsufficientTokens as exc:
+                raise SolverError(ERROR_ZERO_BALANCE, str(exc)) from exc
+            except BillingError as exc:
+                logger.error("billing failed for %s: %s", task_type, exc)
+                raise SolverError(ERROR_SERVICE_UNAVAILABLE, "billing is unavailable") from exc
         with self._lock:
-            if self.closed:
-                raise SolverError(ERROR_SERVICE_UNAVAILABLE, "service is shutting down")
-            timed_out = self._cleanup_locked()
+            closed = self.closed
+            timed_out = [] if closed else self._cleanup_locked()
             active = sum(1 for t in self._tasks.values() if t.status in ("idle", "processing"))
-            accepted = active < self.settings.max_pending
+            accepted = not closed and active < self.settings.max_pending
             if accepted:
                 self._tasks[task.id] = task
         self._count_failed(timed_out)
         if not accepted:
+            self._refund(task)
+            if closed:
+                raise SolverError(ERROR_SERVICE_UNAVAILABLE, "service is shutting down")
             raise SolverError(ERROR_NO_SLOT_AVAILABLE, "too many tasks in progress")
         self.usage.bump(client_key, task_type, "created")
         return task
@@ -350,6 +363,16 @@ class TaskManager:
     def _count_failed(self, tasks) -> None:
         for task in tasks:
             self.usage.bump(task.client_key, task.type, "failed")
+            self._refund(task)
+
+    def _refund(self, task: Task) -> None:
+        """Failed tasks cost nothing: give the reserved tokens back (idempotent)."""
+        if self.billing is None:
+            return
+        try:
+            self.billing.refund(task.id)
+        except BillingError as exc:
+            logger.error("refund of task %s failed: %s", task.id, exc)
 
     def _deadline(self, task: Task) -> float:
         return task.created + self.settings.task_timeout
@@ -407,6 +430,8 @@ class TaskManager:
                 task.error_code, task.error_description = error.code, error.description
                 task.status = "failed"
         self.usage.bump(task.client_key, task.type, "solved" if error is None else "failed")
+        if error is not None:
+            self._refund(task)
         return True
 
     # task types -------------------------------------------------------------
@@ -463,8 +488,10 @@ class TaskManager:
             if self._classify_waiting + self._classify_running >= capacity:
                 raise SolverError(ERROR_NO_SLOT_AVAILABLE, "classification queue is full")
             self._classify_waiting += 1  # reserve the slot before registering
+        module = getattr(getattr(job, "args", (None,))[0], "module", None) \
+            if getattr(job, "args", None) else None
         try:
-            task = self._register(client_key, task_type)
+            task = self._register(client_key, task_type, module if isinstance(module, str) else None)
         except BaseException:
             with self._lock:
                 self._classify_waiting -= 1
@@ -594,6 +621,7 @@ class TaskManager:
 
     def shutdown(self, wait: bool = False) -> None:
         """Stop accepting tasks, abort running solves at their next check and fail the rest."""
+        failed = []
         with self._lock:
             self._cancel.set()
             now = time.monotonic()
@@ -601,5 +629,8 @@ class TaskManager:
                 if task.status in ("idle", "processing"):
                     self._fail_locked(task, ERROR_SERVICE_UNAVAILABLE,
                                       "service is shutting down", now)
+                    failed.append(task)
+        for task in failed:
+            self._refund(task)
         self._pool.shutdown(wait=wait, cancel_futures=True)
         self._classify_pool.shutdown(wait=wait, cancel_futures=True)

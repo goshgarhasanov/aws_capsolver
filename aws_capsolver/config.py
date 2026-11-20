@@ -80,7 +80,9 @@ class Settings:
     open_access: bool = False       # accept any clientKey (local development only)
     allow_private: bool = False     # let websiteURL / proxy target private networks
     max_body_bytes: int = 4 * 1024 * 1024  # request body limit (16 images of 2 MB won't fit)
-    default_balance: float = 1000.0
+    default_balance: float = 1000.0  # opening token grant of a key without "balance"
+    billing: bool = True            # token accounting (price per task, refund on failure)
+    pricing_file: Path = ROOT / "pricing.json"  # optional {"prices": {...}, "tokens_per_usd": N}
     text_default_module: str = "common"  # ImageToTextTask module when the task names none
     extra_keys: Dict[str, dict] = field(default_factory=dict)
 
@@ -112,6 +114,9 @@ class Settings:
         s.verify_token = _env_bool("AWSCS_VERIFY_TOKEN", True)
         s.warmup = _env_bool("AWSCS_WARMUP", True)
         s.open_access = _env_bool("AWSCS_OPEN_ACCESS", False)
+        s.billing = _env_bool("AWSCS_BILLING", True)
+        s.pricing_file = Path(os.environ.get("AWSCS_PRICING_FILE", str(s.pricing_file)))
+        s.default_balance = _env_float("AWSCS_DEFAULT_BALANCE", s.default_balance, minimum=0.0)
         s.allow_private = _env_bool("AWSCS_ALLOW_PRIVATE", False)
         s.max_body_bytes = max(1024, _env_int("AWSCS_MAX_BODY_BYTES", s.max_body_bytes))
         s.text_default_module = _env_text_module("AWSCS_TEXT_DEFAULT_MODULE",
