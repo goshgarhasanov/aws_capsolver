@@ -1,0 +1,194 @@
+{
+  "extName": {
+    "message": "Captchosa"
+  },
+  "extDescription": {
+    "message": "Solves AWS WAF, BLS and image captchas with your own self-hosted Captchosa service."
+  },
+  "on": {
+    "message": "On"
+  },
+  "off": {
+    "message": "Off"
+  },
+  "masterSwitch": {
+    "message": "Turn Captchosa on or off"
+  },
+  "solvers": {
+    "message": "Solvers"
+  },
+  "kind_awsGrid": {
+    "message": "AWS WAF grid"
+  },
+  "kind_awsToken": {
+    "message": "AWS WAF token"
+  },
+  "kind_blsGrid": {
+    "message": "BLS grid"
+  },
+  "kind_blsText": {
+    "message": "BLS Poland text"
+  },
+  "kind_text": {
+    "message": "General text"
+  },
+  "desc_awsGrid": {
+    "message": "Picture grid in the AWS WAF widget"
+  },
+  "desc_awsToken": {
+    "message": "Token for the AWS challenge page"
+  },
+  "desc_blsGrid": {
+    "message": "“Select all boxes with number …”"
+  },
+  "desc_blsText": {
+    "message": "5 digits on the BLS Poland login"
+  },
+  "desc_text": {
+    "message": "Any image captcha next to a captcha field"
+  },
+  "solvedCount": {
+    "message": "solved"
+  },
+  "failedCount": {
+    "message": "failed"
+  },
+  "never": {
+    "message": "never"
+  },
+  "behaviour": {
+    "message": "Behaviour"
+  },
+  "autoSolve": {
+    "message": "Auto-solve"
+  },
+  "autoSolveHint": {
+    "message": "Off: a Solve button appears next to the captcha"
+  },
+  "delay": {
+    "message": "Delay before solving"
+  },
+  "retries": {
+    "message": "Retries"
+  },
+  "retriesHint": {
+    "message": "Rounds per captcha, e.g. after a wrong answer"
+  },
+  "submitAfterFill": {
+    "message": "Submit after filling text"
+  },
+  "submitAfterFillHint": {
+    "message": "Text captchas only, and only with auto-solve"
+  },
+  "blsGridSubmit": {
+    "message": "Press Verify after BLS grid"
+  },
+  "blsGridSubmitHint": {
+    "message": "Skipped while a password field is empty"
+  },
+  "pageBadge": {
+    "message": "Status badge on the page"
+  },
+  "pageBadgeHint": {
+    "message": "Small pill next to the captcha"
+  },
+  "language": {
+    "message": "Language"
+  },
+  "languageAuto": {
+    "message": "Browser language"
+  },
+  "connection": {
+    "message": "Connection"
+  },
+  "serviceUrl": {
+    "message": "Service URL"
+  },
+  "serviceUrlHint": {
+    "message": "Your own Captchosa server, e.g. http://127.0.0.1:8790"
+  },
+  "clientKey": {
+    "message": "Client key"
+  },
+  "show": {
+    "message": "Show"
+  },
+  "hide": {
+    "message": "Hide"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "test": {
+    "message": "Test connection"
+  },
+  "testing": {
+    "message": "Testing…"
+  },
+  "saved": {
+    "message": "Saved"
+  },
+  "permDenied": {
+    "message": "Access to the service URL was not granted"
+  },
+  "badUrl": {
+    "message": "Enter a valid http(s) URL"
+  },
+  "connected": {
+    "message": "Connected"
+  },
+  "offline": {
+    "message": "Offline"
+  },
+  "checking": {
+    "message": "Checking…"
+  },
+  "notConfigured": {
+    "message": "Not configured"
+  },
+  "balance": {
+    "message": "Balance"
+  },
+  "unlimited": {
+    "message": "unlimited"
+  },
+  "version": {
+    "message": "Version"
+  },
+  "activity": {
+    "message": "Recent activity"
+  },
+  "clearLog": {
+    "message": "Clear"
+  },
+  "noActivity": {
+    "message": "Nothing solved yet"
+  },
+  "openOptions": {
+    "message": "Settings"
+  },
+  "advanced": {
+    "message": "Advanced"
+  },
+  "resetStats": {
+    "message": "Reset counters"
+  },
+  "statsReset": {
+    "message": "Counters reset"
+  },
+  "noKey": {
+    "message": "Set the service URL and client key in Settings"
+  },
+  "solveButton": {
+    "message": "Solve"
+  },
+  "about": {
+    "message": "About"
+  },
+  "aboutText": {
+    "message": "Captchosa sends captcha images only to the service URL above. Nothing else leaves your browser."
+  },
+  "ms": {
+    "message": "ms"
+  }
+}

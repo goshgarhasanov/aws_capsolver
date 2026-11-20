@@ -1,0 +1,194 @@
+{
+  "extName": {
+    "message": "Captchosa"
+  },
+  "extDescription": {
+    "message": "AWS WAF, BLS ve resim captcha'larını kendi Captchosa sunucunuzla çözer."
+  },
+  "on": {
+    "message": "Açık"
+  },
+  "off": {
+    "message": "Kapalı"
+  },
+  "masterSwitch": {
+    "message": "Captchosa'yı aç/kapat"
+  },
+  "solvers": {
+    "message": "Çözücüler"
+  },
+  "kind_awsGrid": {
+    "message": "AWS WAF ızgara"
+  },
+  "kind_awsToken": {
+    "message": "AWS WAF token"
+  },
+  "kind_blsGrid": {
+    "message": "BLS ızgara"
+  },
+  "kind_blsText": {
+    "message": "BLS Polonya metin"
+  },
+  "kind_text": {
+    "message": "Genel metin"
+  },
+  "desc_awsGrid": {
+    "message": "AWS WAF penceresindeki resim ızgarası"
+  },
+  "desc_awsToken": {
+    "message": "AWS doğrulama sayfası için token"
+  },
+  "desc_blsGrid": {
+    "message": "“… numaralı tüm kutuları seçin”"
+  },
+  "desc_blsText": {
+    "message": "BLS Polonya girişindeki 5 rakam"
+  },
+  "desc_text": {
+    "message": "Captcha alanının yanındaki resim"
+  },
+  "solvedCount": {
+    "message": "çözüldü"
+  },
+  "failedCount": {
+    "message": "hata"
+  },
+  "never": {
+    "message": "hiç"
+  },
+  "behaviour": {
+    "message": "Davranış"
+  },
+  "autoSolve": {
+    "message": "Otomatik çöz"
+  },
+  "autoSolveHint": {
+    "message": "Kapalı: captcha yanında Çöz düğmesi çıkar"
+  },
+  "delay": {
+    "message": "Çözmeden önce bekleme"
+  },
+  "retries": {
+    "message": "Tekrar sayısı"
+  },
+  "retriesHint": {
+    "message": "Captcha başına tur (yanlış cevaptan sonra)"
+  },
+  "submitAfterFill": {
+    "message": "Metni doldurunca gönder"
+  },
+  "submitAfterFillHint": {
+    "message": "Sadece metin captcha, otomatik çözmede"
+  },
+  "blsGridSubmit": {
+    "message": "BLS ızgaradan sonra Verify'a bas"
+  },
+  "blsGridSubmitHint": {
+    "message": "Şifre alanı boşsa atlanır"
+  },
+  "pageBadge": {
+    "message": "Sayfada durum rozeti"
+  },
+  "pageBadgeHint": {
+    "message": "Captcha yanında küçük etiket"
+  },
+  "language": {
+    "message": "Dil"
+  },
+  "languageAuto": {
+    "message": "Tarayıcı dili"
+  },
+  "connection": {
+    "message": "Bağlantı"
+  },
+  "serviceUrl": {
+    "message": "Servis adresi"
+  },
+  "serviceUrlHint": {
+    "message": "Kendi Captchosa sunucunuz, ör. http://127.0.0.1:8790"
+  },
+  "clientKey": {
+    "message": "İstemci anahtarı"
+  },
+  "show": {
+    "message": "Göster"
+  },
+  "hide": {
+    "message": "Gizle"
+  },
+  "save": {
+    "message": "Kaydet"
+  },
+  "test": {
+    "message": "Bağlantıyı test et"
+  },
+  "testing": {
+    "message": "Test ediliyor…"
+  },
+  "saved": {
+    "message": "Kaydedildi"
+  },
+  "permDenied": {
+    "message": "Servis adresine erişim izni verilmedi"
+  },
+  "badUrl": {
+    "message": "Geçerli bir http(s) adresi girin"
+  },
+  "connected": {
+    "message": "Bağlı"
+  },
+  "offline": {
+    "message": "Bağlantı yok"
+  },
+  "checking": {
+    "message": "Kontrol ediliyor…"
+  },
+  "notConfigured": {
+    "message": "Ayarlanmadı"
+  },
+  "balance": {
+    "message": "Bakiye"
+  },
+  "unlimited": {
+    "message": "sınırsız"
+  },
+  "version": {
+    "message": "Sürüm"
+  },
+  "activity": {
+    "message": "Son işlemler"
+  },
+  "clearLog": {
+    "message": "Temizle"
+  },
+  "noActivity": {
+    "message": "Henüz çözüm yok"
+  },
+  "openOptions": {
+    "message": "Ayarlar"
+  },
+  "advanced": {
+    "message": "Gelişmiş"
+  },
+  "resetStats": {
+    "message": "Sayaçları sıfırla"
+  },
+  "statsReset": {
+    "message": "Sayaçlar sıfırlandı"
+  },
+  "noKey": {
+    "message": "Servis adresini ve anahtarı Ayarlar'da girin"
+  },
+  "solveButton": {
+    "message": "Çöz"
+  },
+  "about": {
+    "message": "Hakkında"
+  },
+  "aboutText": {
+    "message": "Captchosa captcha resimlerini yalnızca yukarıdaki servis adresine gönderir. Başka hiçbir şey tarayıcıdan çıkmaz."
+  },
+  "ms": {
+    "message": "ms"
+  }
+}

@@ -1,0 +1,340 @@
+// Popup and options page logic (both pages load this file; missing elements are skipped).
+"use strict";
+
+const { KINDS, normalize, originPattern } = globalThis.CAPTCHOSA;
+const $ = (id) => document.getElementById(id);
+const isOptions = document.body.classList.contains("options");
+
+let settings = normalize(null);
+let stats = {};
+let log = [];
+let dict = null;            // messages of an explicitly chosen language, else chrome.i18n
+let grantedOrigins = new Set();
+let lastTest = null;
+
+// ------------------------------------------------------------ i18n
+
+async function loadDict(lang) {
+  if (lang === "auto") return null;
+  try {
+    const res = await fetch(chrome.runtime.getURL(`_locales/${lang}/messages.json`));
+    return await res.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+function t(key) {
+  if (dict && dict[key]) return dict[key].message;
+  return chrome.i18n.getMessage(key) || key;
+}
+
+function uiLocale() {
+  return settings.lang === "auto" ? chrome.i18n.getUILanguage() : settings.lang;
+}
+
+function applyI18n() {
+  document.documentElement.lang = uiLocale();
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
+  for (const el of document.querySelectorAll("[data-i18n-aria]")) el.setAttribute("aria-label", t(el.dataset.i18nAria));
+  for (const el of document.querySelectorAll("[data-i18n-title]")) el.title = t(el.dataset.i18nTitle);
+}
+
+function ago(ts) {
+  if (!ts) return t("never");
+  const s = Math.round((ts - Date.now()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(uiLocale(), { numeric: "auto", style: "short" });
+  const abs = Math.abs(s);
+  if (abs < 60) return rtf.format(s, "second");
+  if (abs < 3600) return rtf.format(Math.round(s / 60), "minute");
+  if (abs < 86400) return rtf.format(Math.round(s / 3600), "hour");
+  return rtf.format(Math.round(s / 86400), "day");
+}
+
+const num = (n) => new Intl.NumberFormat(uiLocale()).format(n);
+
+// ------------------------------------------------------------ storage
+
+async function persist(patch) {
+  settings = normalize(Object.assign({}, settings, patch));
+  await chrome.storage.local.set({ settings });
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function makeSwitch(id, checked, label, onChange) {
+  const wrap = el("label", "switch");
+  const input = el("input");
+  input.type = "checkbox";
+  input.id = id;
+  input.setAttribute("role", "switch");
+  input.setAttribute("aria-label", label);
+  input.checked = checked;
+  input.addEventListener("change", () => onChange(input.checked));
+  wrap.append(input, el("span", "track"));
+  return wrap;
+}
+
+// ------------------------------------------------------------ render
+
+function renderSolvers() {
+  const box = $("solvers");
+  if (!box) return;
+  const focused = document.activeElement && box.contains(document.activeElement) ? document.activeElement.id : null;
+  box.textContent = "";
+  for (const kind of KINDS) {
+    const st = stats[kind] || { solved: 0, failed: 0 };
+    const on = settings.solvers[kind];
+    const row = el("div", `solver${on ? "" : " off"}`);
+    row.dataset.kind = kind;
+    row.append(el("span", "name", t(`kind_${kind}`)));
+    row.append(makeSwitch(`solver-${kind}`, on, t(`kind_${kind}`),
+      (v) => persist({ solvers: Object.assign({}, settings.solvers, { [kind]: v }) })));
+    row.append(el("span", "desc", t(`desc_${kind}`)));
+    const meta = el("div", "meta");
+    const ok = el("span", `chip ok${st.solved ? "" : " zero"}`, `✓ ${num(st.solved)}`);
+    ok.title = `${num(st.solved)} ${t("solvedCount")}`;
+    const bad = el("span", `chip err${st.failed ? "" : " zero"}`, `✕ ${num(st.failed)}`);
+    bad.title = `${num(st.failed)} ${t("failedCount")}`;
+    const last = st.last;
+    const when = el("span", `when${last ? (last.ok ? " ok" : " err") : ""}`);
+    when.append(el("span", "lastdot"), document.createTextNode(last ? ago(last.ts) : t("never")));
+    when.title = last ? `${new Date(last.ts).toLocaleString(uiLocale())} – ${last.detail || ""}` : "";
+    meta.append(ok, bad, when);
+    row.append(meta);
+    box.append(row);
+  }
+  if (focused && $(focused)) $(focused).focus(); // keep keyboard focus across re-renders
+}
+
+function renderLog() {
+  const ol = $("log");
+  if (!ol) return;
+  ol.textContent = "";
+  $("logCount").textContent = String(log.length);
+  if (!log.length) {
+    ol.append(el("li", "empty", t("noActivity")));
+    return;
+  }
+  for (const e of log.slice(0, 30)) {
+    const li = el("li");
+    li.append(el("span", `mark ${e.ok ? "ok" : "err"}`, e.ok ? "✓" : "✕"));
+    const what = el("span", "what");
+    what.append(el("b", "", t(`kind_${e.kind}`)), document.createTextNode(" "),
+      el("span", "", `${e.host ? `${e.host} · ` : ""}${e.detail || ""}`));
+    what.title = `${e.host || ""} ${e.detail || ""}`.trim();
+    const when = el("span", "t", `${ago(e.ts)}${e.ms ? ` · ${(e.ms / 1000).toFixed(1)} s` : ""}`);
+    li.append(what, when);
+    ol.append(li);
+  }
+}
+
+function setChecked(id, v) {
+  const e = $(id);
+  if (e) e.checked = v;
+}
+
+function renderForm() {
+  setChecked("enabled", settings.enabled);
+  document.body.classList.toggle("disabled", !settings.enabled);
+  setChecked("autoSolve", settings.autoSolve);
+  setChecked("submitAfterFill", settings.submitAfterFill);
+  setChecked("blsGridSubmit", settings.blsGridSubmit);
+  setChecked("pageBadge", settings.pageBadge);
+  if ($("delayMs") && document.activeElement !== $("delayMs")) $("delayMs").value = Math.min(5000, settings.delayMs);
+  if ($("delayOut")) $("delayOut").textContent = `${num(settings.delayMs)} ${t("ms")}`;
+  if ($("retries") && document.activeElement !== $("retries")) $("retries").value = settings.retries;
+  if ($("lang")) $("lang").value = settings.lang;
+  if ($("serviceUrl") && document.activeElement !== $("serviceUrl")) $("serviceUrl").value = settings.serviceUrl;
+  if ($("clientKey") && document.activeElement !== $("clientKey")) $("clientKey").value = settings.clientKey;
+  const v = chrome.runtime.getManifest();
+  $("versionName").textContent = `v${v.version_name || v.version}`;
+}
+
+function renderStatus() {
+  const pill = $("statusPill");
+  const link = $("setupLink");
+  if (link) link.hidden = true;
+  $("balanceBox").hidden = false;
+  if (!settings.clientKey) {
+    pill.className = "pill warn";
+    $("connText").textContent = t("notConfigured");
+    if (link) {
+      $("balanceBox").hidden = true;
+      link.hidden = false;
+      link.title = t("noKey");
+    }
+    $("balance").textContent = "—";
+    return;
+  }
+  if (!lastTest) {
+    pill.className = "pill";
+    $("connText").textContent = t("checking");
+    return;
+  }
+  const h = lastTest.health || {};
+  const b = lastTest.balance || {};
+  const ok = !h.error && h.ok !== false;
+  pill.className = `pill ${ok && !b.error ? "ok" : "err"}`;
+  $("connText").textContent = ok ? t("connected") : t("offline");
+  pill.title = ok ? `${settings.serviceUrl} · ${t("version")} ${h.version || "?"}` : `${h.error}: ${h.message}`;
+  if (!b.error) {
+    $("balance").textContent = b.balance === null || b.balance === undefined ? t("unlimited") : num(b.balance);
+  } else {
+    $("balance").textContent = "—";
+    if (ok) pill.title = `${b.error}: ${b.message}`;
+  }
+}
+
+function renderAll() {
+  applyI18n();
+  renderForm();
+  renderStatus();
+  renderSolvers();
+  renderLog();
+}
+
+function showMessage(text, kind) {
+  const m = $("message");
+  if (!m) return;
+  m.textContent = text || "";
+  m.className = `message ${kind || ""}`;
+}
+
+// ------------------------------------------------------------ actions
+
+async function testConnection(verbose) {
+  if (verbose) showMessage(t("testing"), "");
+  try {
+    lastTest = await chrome.runtime.sendMessage({ type: "test" });
+  } catch (err) {
+    lastTest = { health: { error: "EXTENSION_ERROR", message: err.message }, balance: { error: "EXTENSION_ERROR" } };
+  }
+  renderStatus();
+  if (!verbose) return;
+  const h = lastTest.health || {};
+  const b = lastTest.balance || {};
+  if (!h.error && !b.error) showMessage(`${t("connected")} · ${t("balance")} ${$("balance").textContent}`, "ok");
+  else if (!h.error) showMessage(`${b.error}: ${b.message}`, "err");
+  else showMessage(`${h.error}: ${h.message}`, "err");
+}
+
+function saveConnection() {
+  const url = $("serviceUrl").value.trim().replace(/\/+$/, "");
+  const key = $("clientKey").value.trim();
+  const pattern = originPattern(url);
+  if (!pattern) {
+    showMessage(t("badUrl"), "err");
+    return;
+  }
+  const done = async () => {
+    await persist({ serviceUrl: url, clientKey: key });
+    showMessage(t("saved"), "ok");
+    lastTest = null;
+    renderStatus();
+    testConnection(false);
+  };
+  if (grantedOrigins.has(pattern)) {
+    done();
+    return;
+  }
+  // must run synchronously inside the click to count as a user gesture
+  chrome.permissions.request({ origins: [pattern] }).then((granted) => {
+    if (granted) {
+      grantedOrigins.add(pattern);
+      done();
+    } else {
+      showMessage(t("permDenied"), "err");
+    }
+  }, (err) => showMessage(`${t("permDenied")}: ${err.message}`, "err"));
+}
+
+function on(id, event, fn) {
+  const e = $(id);
+  if (e) e.addEventListener(event, fn);
+}
+
+function bind() {
+  on("enabled", "change", (e) => persist({ enabled: e.target.checked }));
+  for (const id of ["autoSolve", "submitAfterFill", "blsGridSubmit", "pageBadge"]) {
+    on(id, "change", (e) => persist({ [id]: e.target.checked }));
+  }
+  on("delayMs", "input", (e) => { $("delayOut").textContent = `${num(Number(e.target.value))} ${t("ms")}`; });
+  on("delayMs", "change", (e) => persist({ delayMs: e.target.value }));
+  on("retries", "change", (e) => persist({ retries: e.target.value }));
+  on("retriesDown", "click", () => persist({ retries: settings.retries - 1 }));
+  on("retriesUp", "click", () => persist({ retries: settings.retries + 1 }));
+  on("lang", "change", (e) => persist({ lang: e.target.value }));
+  on("toggleKey", "click", () => {
+    const k = $("clientKey");
+    k.type = k.type === "password" ? "text" : "password";
+    $("toggleKey").dataset.i18n = k.type === "password" ? "show" : "hide";
+    $("toggleKey").textContent = t($("toggleKey").dataset.i18n);
+  });
+  on("save", "click", saveConnection);
+  on("test", "click", () => testConnection(true));
+  on("clearLog", "click", (e) => {
+    e.preventDefault(); // inside <summary>: do not toggle
+    chrome.storage.local.set({ log: [] });
+  });
+  on("resetStats", "click", async () => {
+    await chrome.storage.local.set({ stats: {} });
+    showMessage(t("statsReset"), "ok");
+  });
+  for (const id of ["openOptions", "setupLink"]) {
+    on(id, "click", (e) => {
+      e.preventDefault();
+      chrome.runtime.openOptionsPage();
+    });
+  }
+  const activity = $("activity");
+  if (activity && !isOptions) {
+    activity.addEventListener("toggle", () => {
+      try { localStorage.setItem("activityOpen", activity.open ? "1" : "0"); } catch (_) { /* optional */ }
+    });
+    try { activity.open = localStorage.getItem("activityOpen") === "1"; } catch (_) { /* optional */ }
+  }
+
+  chrome.permissions.onAdded.addListener((p) => (p.origins || []).forEach((o) => grantedOrigins.add(o)));
+  chrome.permissions.onRemoved.addListener((p) => (p.origins || []).forEach((o) => grantedOrigins.delete(o)));
+
+  chrome.storage.onChanged.addListener(async (changes, area) => {
+    if (area !== "local") return;
+    if (changes.settings) {
+      const prev = settings;
+      settings = normalize(changes.settings.newValue);
+      if (prev.lang !== settings.lang) dict = await loadDict(settings.lang);
+      if (prev.serviceUrl !== settings.serviceUrl || prev.clientKey !== settings.clientKey) {
+        lastTest = null;
+        testConnection(false);
+      }
+    }
+    if (changes.stats) stats = changes.stats.newValue || {};
+    if (changes.log) log = changes.log.newValue || [];
+    renderAll();
+  });
+}
+
+async function init() {
+  const data = await chrome.storage.local.get(["settings", "stats", "log"]);
+  settings = normalize(data.settings);
+  stats = data.stats || {};
+  log = data.log || [];
+  dict = await loadDict(settings.lang);
+  try {
+    const all = await chrome.permissions.getAll();
+    grantedOrigins = new Set(all.origins || []);
+  } catch (_) { /* treated as not granted */ }
+  bind();
+  renderAll();
+  if (settings.clientKey) testConnection(false);
+  // keep "x min ago" fresh while the page is open
+  setInterval(() => { renderSolvers(); renderLog(); }, 30000);
+}
+
+init();

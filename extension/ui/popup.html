@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Captchosa</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header class="top">
+    <img class="mark" src="../icons/icon48.png" alt="">
+    <h1>Captchosa</h1>
+    <label class="switch lg" data-i18n-title="masterSwitch">
+      <input type="checkbox" id="enabled" role="switch" data-i18n-aria="masterSwitch">
+      <span class="track"></span>
+    </label>
+  </header>
+
+  <div class="status-row">
+    <div class="pill" id="statusPill" role="status" aria-live="polite">
+      <span class="dot"></span><span class="conn" id="connText" data-i18n="checking">Checking…</span>
+      <span class="bal" id="balanceBox"><span data-i18n="balance">Balance</span> <b id="balance">—</b></span>
+      <a href="#" id="setupLink" hidden data-i18n="openOptions">Settings</a>
+    </div>
+  </div>
+
+  <main>
+    <section class="card" aria-labelledby="solversTitle">
+      <h2 id="solversTitle" data-i18n="solvers">Solvers</h2>
+      <div id="solvers"></div>
+    </section>
+
+    <section class="card behaviour" aria-labelledby="behaviourTitle">
+      <h2 id="behaviourTitle" data-i18n="behaviour">Behaviour</h2>
+      <div class="row">
+        <span class="label"><span data-i18n="autoSolve">Auto-solve</span><small data-i18n="autoSolveHint"></small></span>
+        <label class="switch"><input type="checkbox" id="autoSolve" role="switch" data-i18n-aria="autoSolve"><span class="track"></span></label>
+      </div>
+      <div class="row stack">
+        <div class="range-head"><label for="delayMs" data-i18n="delay">Delay before solving</label><output id="delayOut" for="delayMs"></output></div>
+        <input type="range" id="delayMs" min="0" max="5000" step="100">
+      </div>
+      <div class="row">
+        <span class="label"><span id="retriesLabel" data-i18n="retries">Retries</span><small data-i18n="retriesHint"></small></span>
+        <span class="stepper" role="group" aria-labelledby="retriesLabel">
+          <button type="button" id="retriesDown" aria-label="−">−</button>
+          <input type="number" id="retries" min="1" max="10" aria-labelledby="retriesLabel">
+          <button type="button" id="retriesUp" aria-label="+">+</button>
+        </span>
+      </div>
+      <div class="row">
+        <span class="label"><span data-i18n="submitAfterFill">Submit after filling text</span><small data-i18n="submitAfterFillHint"></small></span>
+        <label class="switch"><input type="checkbox" id="submitAfterFill" role="switch" data-i18n-aria="submitAfterFill"><span class="track"></span></label>
+      </div>
+    </section>
+
+    <details class="card" id="activity">
+      <summary><span data-i18n="activity">Recent activity</span><span class="count" id="logCount">0</span>
+        <button type="button" class="btn small ghost" id="clearLog" data-i18n="clearLog">Clear</button></summary>
+      <ol id="log"></ol>
+    </details>
+  </main>
+
+  <footer>
+    <span id="versionName"></span>
+    <a href="#" id="openOptions"><span data-i18n="openOptions">Settings</span> →</a>
+  </footer>
+
+  <script src="../common/defaults.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>

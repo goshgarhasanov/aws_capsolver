@@ -1,0 +1,194 @@
+{
+  "extName": {
+    "message": "Captchosa"
+  },
+  "extDescription": {
+    "message": "AWS WAF, BLS və şəkil captcha-larını öz Captchosa serverinizlə həll edir."
+  },
+  "on": {
+    "message": "Aktiv"
+  },
+  "off": {
+    "message": "Deaktiv"
+  },
+  "masterSwitch": {
+    "message": "Captchosa-nı aç/bağla"
+  },
+  "solvers": {
+    "message": "Həlledicilər"
+  },
+  "kind_awsGrid": {
+    "message": "AWS WAF şəbəkə"
+  },
+  "kind_awsToken": {
+    "message": "AWS WAF token"
+  },
+  "kind_blsGrid": {
+    "message": "BLS şəbəkə"
+  },
+  "kind_blsText": {
+    "message": "BLS Polşa mətn"
+  },
+  "kind_text": {
+    "message": "Ümumi mətn"
+  },
+  "desc_awsGrid": {
+    "message": "AWS WAF pəncərəsindəki şəkil şəbəkəsi"
+  },
+  "desc_awsToken": {
+    "message": "AWS yoxlama səhifəsi üçün token"
+  },
+  "desc_blsGrid": {
+    "message": "“… nömrəli bütün qutuları seçin”"
+  },
+  "desc_blsText": {
+    "message": "BLS Polşa girişindəki 5 rəqəm"
+  },
+  "desc_text": {
+    "message": "Captcha sahəsinin yanındakı şəkil"
+  },
+  "solvedCount": {
+    "message": "həll"
+  },
+  "failedCount": {
+    "message": "xəta"
+  },
+  "never": {
+    "message": "heç vaxt"
+  },
+  "behaviour": {
+    "message": "Davranış"
+  },
+  "autoSolve": {
+    "message": "Avtomatik həll"
+  },
+  "autoSolveHint": {
+    "message": "Deaktiv: captcha yanında Həll et düyməsi çıxır"
+  },
+  "delay": {
+    "message": "Həlldən əvvəl gözləmə"
+  },
+  "retries": {
+    "message": "Təkrar sayı"
+  },
+  "retriesHint": {
+    "message": "Captcha başına raund (səhv cavabdan sonra)"
+  },
+  "submitAfterFill": {
+    "message": "Mətni doldurduqdan sonra göndər"
+  },
+  "submitAfterFillHint": {
+    "message": "Yalnız mətn captcha, avtomatik həlldə"
+  },
+  "blsGridSubmit": {
+    "message": "BLS şəbəkədən sonra Verify bas"
+  },
+  "blsGridSubmitHint": {
+    "message": "Şifrə sahəsi boşdursa ötürülür"
+  },
+  "pageBadge": {
+    "message": "Səhifədə status nişanı"
+  },
+  "pageBadgeHint": {
+    "message": "Captcha yanında kiçik nişan"
+  },
+  "language": {
+    "message": "Dil"
+  },
+  "languageAuto": {
+    "message": "Brauzer dili"
+  },
+  "connection": {
+    "message": "Bağlantı"
+  },
+  "serviceUrl": {
+    "message": "Xidmət ünvanı"
+  },
+  "serviceUrlHint": {
+    "message": "Öz Captchosa serveriniz, məs. http://127.0.0.1:8790"
+  },
+  "clientKey": {
+    "message": "Müştəri açarı"
+  },
+  "show": {
+    "message": "Göstər"
+  },
+  "hide": {
+    "message": "Gizlət"
+  },
+  "save": {
+    "message": "Yadda saxla"
+  },
+  "test": {
+    "message": "Bağlantını yoxla"
+  },
+  "testing": {
+    "message": "Yoxlanılır…"
+  },
+  "saved": {
+    "message": "Yadda saxlanıldı"
+  },
+  "permDenied": {
+    "message": "Xidmət ünvanına icazə verilmədi"
+  },
+  "badUrl": {
+    "message": "Düzgün http(s) ünvanı daxil edin"
+  },
+  "connected": {
+    "message": "Qoşulub"
+  },
+  "offline": {
+    "message": "Bağlantı yoxdur"
+  },
+  "checking": {
+    "message": "Yoxlanılır…"
+  },
+  "notConfigured": {
+    "message": "Qurulmayıb"
+  },
+  "balance": {
+    "message": "Balans"
+  },
+  "unlimited": {
+    "message": "limitsiz"
+  },
+  "version": {
+    "message": "Versiya"
+  },
+  "activity": {
+    "message": "Son fəaliyyət"
+  },
+  "clearLog": {
+    "message": "Təmizlə"
+  },
+  "noActivity": {
+    "message": "Hələ heç nə həll olunmayıb"
+  },
+  "openOptions": {
+    "message": "Parametrlər"
+  },
+  "advanced": {
+    "message": "Əlavə"
+  },
+  "resetStats": {
+    "message": "Sayğacları sıfırla"
+  },
+  "statsReset": {
+    "message": "Sayğaclar sıfırlandı"
+  },
+  "noKey": {
+    "message": "Xidmət ünvanını və açarı Parametrlərdə daxil edin"
+  },
+  "solveButton": {
+    "message": "Həll et"
+  },
+  "about": {
+    "message": "Haqqında"
+  },
+  "aboutText": {
+    "message": "Captchosa captcha şəkillərini yalnız yuxarıdakı xidmət ünvanına göndərir. Başqa heç nə brauzerdən çıxmır."
+  },
+  "ms": {
+    "message": "ms"
+  }
+}

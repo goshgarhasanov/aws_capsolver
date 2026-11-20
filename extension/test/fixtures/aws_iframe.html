@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><title>AWS iframe fixture</title></head>
+<body style="font-family:sans-serif;margin:20px">
+<h1>AWS WAF captcha in a cross-origin iframe (closed shadow root, XHR)</h1>
+<iframe id="cap" width="420" height="480" style="border:1px solid #999"></iframe>
+<script>
+  // same server, other hostname = other origin
+  const port = location.port;
+  document.getElementById('cap').src = `http://localhost:${port}/fixtures/aws_frame.html`;
+</script>
+</body></html>

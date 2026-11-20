@@ -1,0 +1,194 @@
+{
+  "extName": {
+    "message": "Captchosa"
+  },
+  "extDescription": {
+    "message": "Решает капчи AWS WAF, BLS и картинки через ваш собственный сервис Captchosa."
+  },
+  "on": {
+    "message": "Вкл."
+  },
+  "off": {
+    "message": "Выкл."
+  },
+  "masterSwitch": {
+    "message": "Включить или выключить Captchosa"
+  },
+  "solvers": {
+    "message": "Решатели"
+  },
+  "kind_awsGrid": {
+    "message": "AWS WAF сетка"
+  },
+  "kind_awsToken": {
+    "message": "AWS WAF токен"
+  },
+  "kind_blsGrid": {
+    "message": "BLS сетка"
+  },
+  "kind_blsText": {
+    "message": "BLS Польша текст"
+  },
+  "kind_text": {
+    "message": "Обычный текст"
+  },
+  "desc_awsGrid": {
+    "message": "Сетка картинок в виджете AWS WAF"
+  },
+  "desc_awsToken": {
+    "message": "Токен для страницы проверки AWS"
+  },
+  "desc_blsGrid": {
+    "message": "«Выберите все ячейки с числом …»"
+  },
+  "desc_blsText": {
+    "message": "5 цифр при входе BLS Польша"
+  },
+  "desc_text": {
+    "message": "Любая картинка рядом с полем капчи"
+  },
+  "solvedCount": {
+    "message": "решено"
+  },
+  "failedCount": {
+    "message": "ошибок"
+  },
+  "never": {
+    "message": "никогда"
+  },
+  "behaviour": {
+    "message": "Поведение"
+  },
+  "autoSolve": {
+    "message": "Автоматически"
+  },
+  "autoSolveHint": {
+    "message": "Выкл.: рядом с капчей появится кнопка «Решить»"
+  },
+  "delay": {
+    "message": "Задержка перед решением"
+  },
+  "retries": {
+    "message": "Повторы"
+  },
+  "retriesHint": {
+    "message": "Раундов на капчу (после неверного ответа)"
+  },
+  "submitAfterFill": {
+    "message": "Отправлять после ввода текста"
+  },
+  "submitAfterFillHint": {
+    "message": "Только текстовые капчи и автоматический режим"
+  },
+  "blsGridSubmit": {
+    "message": "Нажимать Verify после сетки BLS"
+  },
+  "blsGridSubmitHint": {
+    "message": "Пропускается, если пароль не введён"
+  },
+  "pageBadge": {
+    "message": "Значок статуса на странице"
+  },
+  "pageBadgeHint": {
+    "message": "Небольшая метка рядом с капчей"
+  },
+  "language": {
+    "message": "Язык"
+  },
+  "languageAuto": {
+    "message": "Язык браузера"
+  },
+  "connection": {
+    "message": "Подключение"
+  },
+  "serviceUrl": {
+    "message": "Адрес сервиса"
+  },
+  "serviceUrlHint": {
+    "message": "Ваш сервер Captchosa, напр. http://127.0.0.1:8790"
+  },
+  "clientKey": {
+    "message": "Ключ клиента"
+  },
+  "show": {
+    "message": "Показать"
+  },
+  "hide": {
+    "message": "Скрыть"
+  },
+  "save": {
+    "message": "Сохранить"
+  },
+  "test": {
+    "message": "Проверить связь"
+  },
+  "testing": {
+    "message": "Проверка…"
+  },
+  "saved": {
+    "message": "Сохранено"
+  },
+  "permDenied": {
+    "message": "Доступ к адресу сервиса не разрешён"
+  },
+  "badUrl": {
+    "message": "Введите корректный http(s) адрес"
+  },
+  "connected": {
+    "message": "Подключено"
+  },
+  "offline": {
+    "message": "Нет связи"
+  },
+  "checking": {
+    "message": "Проверка…"
+  },
+  "notConfigured": {
+    "message": "Не настроено"
+  },
+  "balance": {
+    "message": "Баланс"
+  },
+  "unlimited": {
+    "message": "без лимита"
+  },
+  "version": {
+    "message": "Версия"
+  },
+  "activity": {
+    "message": "Последние действия"
+  },
+  "clearLog": {
+    "message": "Очистить"
+  },
+  "noActivity": {
+    "message": "Пока ничего не решено"
+  },
+  "openOptions": {
+    "message": "Настройки"
+  },
+  "advanced": {
+    "message": "Дополнительно"
+  },
+  "resetStats": {
+    "message": "Сбросить счётчики"
+  },
+  "statsReset": {
+    "message": "Счётчики сброшены"
+  },
+  "noKey": {
+    "message": "Укажите адрес сервиса и ключ в настройках"
+  },
+  "solveButton": {
+    "message": "Решить"
+  },
+  "about": {
+    "message": "О расширении"
+  },
+  "aboutText": {
+    "message": "Captchosa отправляет изображения капчи только на указанный выше адрес сервиса. Больше ничего не покидает браузер."
+  },
+  "ms": {
+    "message": "мс"
+  }
+}
