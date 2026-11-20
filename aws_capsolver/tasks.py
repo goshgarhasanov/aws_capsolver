@@ -11,10 +11,11 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import bls_bridge, vision_bridge
+from . import bls_bridge, text, vision_bridge
 from .config import Settings, UsageStore
 from .waf.errors import (ALL_CODES, ERROR_CAPTCHA_UNSOLVABLE, ERROR_INVALID_TASK_DATA,
                          ERROR_NO_SLOT_AVAILABLE, ERROR_SERVICE_UNAVAILABLE,
@@ -29,14 +30,18 @@ TASK_WAF = "AntiAwsWafTask"
 TASK_WAF_PROXYLESS = "AntiAwsWafTaskProxyLess"
 TASK_CLASSIFY = "AwsWafClassification"
 TASK_BLS = "BlsClassification"
-CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS)
-SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS)
+TASK_TEXT = "ImageToTextTask"
+# synchronous task types: answered in the createTask reply, run on the bounded
+# classification executor (shared runners, queue and admission control)
+CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS, TASK_TEXT)
+SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS, TASK_TEXT)
 BLS_GRID_TILES = 9
 MAX_IMAGES = 16
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_URL_LENGTH = 4096
 MAX_FIELD_LENGTH = 16 * 1024      # gokuProps context and similar opaque blobs
 MAX_USER_AGENT_LENGTH = 512
+MAX_TEXT_LENGTH = 64              # ImageToTextTask minLength / maxLength upper bound
 WATCHDOG_GRACE = 15.0             # seconds past the deadline before a task is force-failed
 
 
@@ -110,19 +115,20 @@ def build_solve_request(task: Dict[str, Any]) -> SolveRequest:
     )
 
 
-def _decode_image(value: Any, index: int) -> bytes:
+def _decode_image(value: Any, name: str) -> bytes:
+    """Base64 (or a data: URL) -> bytes, at most MAX_IMAGE_BYTES; `name` labels errors."""
     if not isinstance(value, str) or not value:
-        raise SolverError(ERROR_INVALID_TASK_DATA, f"images[{index}] must be a base64 string")
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} must be a base64 string")
     if value.startswith("data:"):
         value = value.split(",", 1)[-1]
     if len(value) > MAX_IMAGE_BYTES * 4 // 3 + 8:
-        raise SolverError(ERROR_INVALID_TASK_DATA, f"images[{index}] has a bad size")
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} has a bad size")
     try:
         data = base64.b64decode(value, validate=False)
     except (binascii.Error, ValueError) as exc:
-        raise SolverError(ERROR_INVALID_TASK_DATA, f"images[{index}] is not base64") from exc
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} is not base64") from exc
     if not data or len(data) > MAX_IMAGE_BYTES:
-        raise SolverError(ERROR_INVALID_TASK_DATA, f"images[{index}] has a bad size")
+        raise SolverError(ERROR_INVALID_TASK_DATA, f"{name} has a bad size")
     return data
 
 
@@ -147,7 +153,7 @@ def parse_bls(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
     if not isinstance(images, list) or len(images) != BLS_GRID_TILES:
         raise SolverError(ERROR_INVALID_TASK_DATA,
                           f"images[] must hold the {BLS_GRID_TILES} grid tiles")
-    return "bls", target, [_decode_image(v, i) for i, v in enumerate(images)]
+    return "bls", target, [_decode_image(v, f"images[{i}]") for i, v in enumerate(images)]
 
 
 def parse_classification(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
@@ -168,7 +174,7 @@ def parse_classification(task: Dict[str, Any]) -> Tuple[str, str, List[bytes]]:
         raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"question family {family!r} is not supported")
     if family == "grid" and not target:
         raise SolverError(ERROR_INVALID_TASK_DATA, "grid question without a target")
-    return family, target, [_decode_image(v, i) for i, v in enumerate(images)]
+    return family, target, [_decode_image(v, f"images[{i}]") for i, v in enumerate(images)]
 
 
 def classify(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,6 +216,82 @@ def _run_bls(target: str, decoded: List[bytes]) -> Dict[str, Any]:
     if not objects:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"no tile shows {target}")
     return {"objects": objects, "readings": readings}
+
+
+@dataclass(frozen=True)
+class TextJob:
+    """A validated ImageToTextTask."""
+    module: str
+    image: bytes
+    numeric: int = text.NUMERIC_ANY
+    case: Optional[bool] = None
+    min_length: int = 0
+    max_length: int = 0
+
+
+def _opt_int(task: Dict[str, Any], name: str, low: int, high: int) -> int:
+    value = task.get(name)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          f"{name} must be an integer from {low} to {high}")
+    return value
+
+
+def parse_text(task: Dict[str, Any], default_module: str = text.DEFAULT_MODULE) -> TextJob:
+    """
+    Validate an ImageToTextTask (CapSolver shape):
+    {body: base64 | data: URL, module?, case?: bool, numeric?: 0-4, minLength?, maxLength?}.
+    """
+    try:
+        module = text.resolve_module(_opt_str(task, "module", 64), default_module)
+    except text.UnknownModule as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, str(exc)) from exc
+    case = task.get("case")
+    if case is not None and not isinstance(case, bool):
+        raise SolverError(ERROR_INVALID_TASK_DATA, "case must be a boolean")
+    numeric = _opt_int(task, "numeric", 0, max(text.NUMERIC_VALUES))
+    min_length = _opt_int(task, "minLength", 0, MAX_TEXT_LENGTH)
+    max_length = _opt_int(task, "maxLength", 0, MAX_TEXT_LENGTH)
+    if min_length and max_length and min_length > max_length:
+        raise SolverError(ERROR_INVALID_TASK_DATA, "minLength is greater than maxLength")
+    if "body" not in task:
+        raise SolverError(ERROR_INVALID_TASK_DATA, "body is required")
+    return TextJob(module=module, image=_decode_image(task.get("body"), "body"),
+                   numeric=numeric, case=case, min_length=min_length, max_length=max_length)
+
+
+def run_text(job: TextJob) -> Dict[str, Any]:
+    """The OCR call for a validated ImageToTextTask -> {"text", "confidence"}."""
+    constraints = text.Constraints(numeric=job.numeric, case=job.case,
+                                   min_length=job.min_length, max_length=job.max_length)
+    try:
+        reading = text.recognize(job.module, job.image, constraints)
+        answer, confidence = text.apply_filters(reading, job.numeric, job.case,
+                                                job.min_length, job.max_length)
+    except text.InvalidImage as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, str(exc) or "body is not a readable image") \
+            from exc
+    except text.ModelUnavailable as exc:
+        raise SolverError(ERROR_TASK_NOT_SUPPORTED, str(exc)) from exc
+    except text.TextUnsolvable as exc:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, str(exc)) from exc
+    except (TypeError, ValueError) as exc:  # malformed recogniser output
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE,
+                          f"bad solver output ({exc.__class__.__name__})") from exc
+    return {"text": answer, "confidence": round(confidence, 4)}
+
+
+def parse_sync_job(task: Dict[str, Any], default_text_module: str = text.DEFAULT_MODULE
+                   ) -> Tuple[str, Callable[[], Dict[str, Any]]]:
+    """Validate any synchronous task -> (task type, zero-argument call producing the solution)."""
+    task_type = task.get("type")
+    if task_type == TASK_TEXT:
+        return TASK_TEXT, partial(run_text, parse_text(task, default_text_module))
+    job = parse_classification(task)
+    return (TASK_BLS if task_type == TASK_BLS else TASK_CLASSIFY), partial(run_classification,
+                                                                         *job)
 
 
 class TaskManager:
@@ -366,22 +448,22 @@ class TaskManager:
     def submit_classification(self, client_key: str, payload: Any
                               ) -> Tuple[Task, Optional[Future]]:
         """
-        Admit and queue one classification. Raises ERROR_NO_SLOT_AVAILABLE when the
-        runners and the queue are full. Returns the task and the future of the vision call
-        (None when it could not be queued; the task is then already finished).
+        Admit and queue one synchronous task (classification or ImageToTextTask). Raises
+        ERROR_NO_SLOT_AVAILABLE when the runners and the queue are full. Returns the task
+        and the future of the model call (None when it could not be queued; the task is then already finished).
         """
         if self.closed:
             raise SolverError(ERROR_SERVICE_UNAVAILABLE, "service is shutting down")
         if not isinstance(payload, dict):
             raise SolverError(ERROR_INVALID_TASK_DATA, "task must be an object")
-        job = parse_classification(payload)  # bad input never takes a queue slot
+        # bad input never takes a queue slot
+        task_type, job = parse_sync_job(payload, self.settings.text_default_module)
         capacity = self.settings.vision_concurrency + self.settings.classify_queue_limit
         with self._lock:
             if self._classify_waiting + self._classify_running >= capacity:
                 raise SolverError(ERROR_NO_SLOT_AVAILABLE, "classification queue is full")
             self._classify_waiting += 1  # reserve the slot before registering
         try:
-            task_type = TASK_BLS if payload.get("type") == TASK_BLS else TASK_CLASSIFY
             task = self._register(client_key, task_type)
         except BaseException:
             with self._lock:
@@ -406,7 +488,7 @@ class TaskManager:
             with self._lock:
                 self._classify_waiting -= 1
 
-    def _run_classification(self, task: Task, job: Tuple[str, str, List[bytes]],
+    def _run_classification(self, task: Task, job: Callable[[], Dict[str, Any]],
                             deadline: float) -> Dict[str, Any]:
         with self._lock:
             self._classify_waiting -= 1
@@ -416,7 +498,7 @@ class TaskManager:
         if stale:  # the client already got its timeout: do not spend CPU on it
             raise SolverError(ERROR_TASK_TIMEOUT, "classification waited too long in the queue")
         try:
-            return run_classification(*job)
+            return job()
         finally:
             with self._lock:
                 self._classify_running -= 1

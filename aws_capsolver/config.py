@@ -49,6 +49,18 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_text_module(name: str, default: str) -> str:
+    from .text import UnknownModule, resolve_module  # light: no model is imported
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return resolve_module(raw)
+    except UnknownModule as exc:
+        logger.warning("ignoring %s: %s", name, exc)
+        return default
+
+
 @dataclass
 class Settings:
     keys_file: Path = ROOT / "keys.json"
@@ -69,6 +81,7 @@ class Settings:
     allow_private: bool = False     # let websiteURL / proxy target private networks
     max_body_bytes: int = 4 * 1024 * 1024  # request body limit (16 images of 2 MB won't fit)
     default_balance: float = 1000.0
+    text_default_module: str = "common"  # ImageToTextTask module when the task names none
     extra_keys: Dict[str, dict] = field(default_factory=dict)
 
     @property
@@ -101,6 +114,8 @@ class Settings:
         s.open_access = _env_bool("AWSCS_OPEN_ACCESS", False)
         s.allow_private = _env_bool("AWSCS_ALLOW_PRIVATE", False)
         s.max_body_bytes = max(1024, _env_int("AWSCS_MAX_BODY_BYTES", s.max_body_bytes))
+        s.text_default_module = _env_text_module("AWSCS_TEXT_DEFAULT_MODULE",
+                                                 s.text_default_module)
         for key in filter(None, (k.strip() for k in os.environ.get("AWSCS_KEYS", "").split(","))):
             s.extra_keys[key] = {"name": "env"}
         return s

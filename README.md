@@ -1,12 +1,13 @@
 # captchosa (package `aws_capsolver`)
 
-A self-hosted AWS WAF and BLS captcha solving service that speaks the CapSolver API. A client that already
+A self-hosted AWS WAF, BLS and text captcha solving service that speaks the CapSolver API. A client that already
 talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 
 - `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess`: solve a site's AWS WAF (PoW challenge,
   then the visual or audio CAPTCHA when needed) and return the `aws-waf-token` cookie.
 - `AwsWafClassification`: answer one already-fetched CAPTCHA problem (grid tiles).
 - `BlsClassification`: the BLS "select all boxes with number NNN" grid (bls_capsolver CNN).
+- `ImageToTextTask`: text captchas (BLS Poland model, general model, ddddocr fallback).
 - `getBalance`, `getTaskResult`, `/health`.
 
 Contents: [Layout](#layout) - [Quick start](#quick-start) - [API reference](#api-reference) -
@@ -28,6 +29,9 @@ aws_capsolver/
     http.py       sessions, proxy parsing, network error -> error code mapping
   vision/         grid tile classifier (CLIP), toycar stub, audio (faster-whisper)
   vision_bridge.py lazy import of vision/, works without it
+  text/           ImageToTextTask: module routing + filters (__init__.py), ddddocr
+                  fallback (common.py), BLS Poland model (bls_poland.py), general model
+                  (general.py); every model is imported lazily
   tasks.py        task validation, bounded worker pool, registry with TTL
   server.py       FastAPI app
   config.py       env settings, client keys, SQLite usage counters
@@ -219,6 +223,55 @@ git clone https://github.com/goshgarhasanov/bls_capsolver ../bls_capsolver
 The decision threshold defaults to 0.3 (as in the BlsSpainTurkey bot) and can be changed
 with `BLS_CAPSOLVER_THRESHOLD`; `BLS_CAPSOLVER_WEIGHTS` points at another checkpoint.
 
+### POST /createTask - ImageToTextTask (synchronous)
+
+CapSolver's text-captcha task: one image in, the text out, in the `createTask` reply.
+
+```bash
+curl -s localhost:8790/createTask -H 'content-type: application/json' -d '{"clientKey":"K","task":{
+  "type":"ImageToTextTask","module":"bls_poland","body":"iVBORw0KGgoAAAANSUhEUgAA...",
+  "case":true,"numeric":0,"minLength":4,"maxLength":8}}'
+```
+```json
+{"errorId": 0, "taskId": "...", "status": "ready", "solution": {"text": "7Kp3m", "confidence": 0.9731}}
+```
+
+| field | required | meaning |
+|---|---|---|
+| `body` | yes | the image as base64 or a `data:` URL, at most 2 MB decoded (and within `AWSCS_MAX_BODY_BYTES`) |
+| `module` | no | which recogniser, see below; default `AWSCS_TEXT_DEFAULT_MODULE` (`common`) |
+| `case` | no | `true` = case-sensitive (text as read); `false` = the answer is lower-cased. Omitted = as read |
+| `numeric` | no | `0` any (default), `1` digits only, `2` letters only, `3` only digits or only letters, `4` both digits and letters |
+| `minLength`, `maxLength` | no | expected length, 0..64; `0` = no limit |
+
+Modules (case-insensitive; aliases in brackets):
+
+| module | recogniser |
+|---|---|
+| `bls_poland` (`blspoland`, `bls-poland`) | the dedicated BLS Poland model (`aws_capsolver/text/bls_poland.py`) |
+| `common` (`general`) | every other text captcha: the general model (`aws_capsolver/text/general.py`) when it is installed and has its weights, else the ddddocr fallback |
+| `ddddocr` | force the fallback: ddddocr's bundled ONNX model, read under four preprocessings (plain, contrast-enhanced, autocontrast, Otsu binary) that vote weighted by per-character confidence; ASCII letters and digits only |
+
+Constraints: `numeric` 1 / 2, `minLength` / `maxLength` and `case` are passed to the
+recogniser (the general model and ddddocr decode under them), then enforced again on the
+answer: with `numeric` 1 / 2 the first ranked candidate of the right kind wins, otherwise
+the other kind of character is removed; an answer outside the length range fails with
+`ERROR_CAPTCHA_UNSOLVABLE`. `confidence` (0..1) is the model's own score (ddddocr: the share
+of the vote backing the answer, weighted by its weakest character).
+
+Errors: `ERROR_INVALID_TASK_DATA` (no or bad `body`, image over 2 MB / 2000 px or
+undecodable, unknown `module` - the description lists the valid ones -, bad `case` /
+`numeric` / length fields), `ERROR_CAPTCHA_UNSOLVABLE` (nothing read, or nothing left
+after the filters / length range), `ERROR_TASK_NOT_SUPPORTED` (the module's model is not
+installed or its weights are missing; for `common`, neither the general model nor ddddocr
+can run). It shares the classification runners, queue and limits
+(`AWSCS_VISION_CONCURRENCY`, `AWSCS_MAX_CLASSIFY_QUEUE`, `AWSCS_CLASSIFY_TIMEOUT`,
+`ERROR_NO_SLOT_AVAILABLE`) with `AwsWafClassification` and `BlsClassification`.
+
+The ddddocr fallback needs `pip install ddddocr` (works on Python 3.12 and 3.14; it pulls in
+onnxruntime and opencv-python-headless). With `AWSCS_WARMUP=1` every installed text model
+is loaded at startup.
+
 ### POST /getBalance
 
 ```bash
@@ -235,11 +288,16 @@ The service takes no payments; `balance` is the static value from `keys.json`
 ### GET /health
 
 ```json
-{"ok": true, "version": "0.1.0", "vision": true, "time": 1795127465}
+{"ok": true, "version": "0.1.0", "vision": true,
+ "text": {"bls_poland": true, "common": true, "ddddocr": true}, "time": 1795127465,
+ "load": {"tasks_active": 0, "waf_queued": 0, "waf_running": 0, "classify_queued": 0,
+          "classify_running": 0, "classify_capacity": 9}}
 ```
 `ok` turns `false` while the service is shutting down. `vision` is `false` when the vision
 package cannot be imported; WAF tasks then still solve
-PoW-only pages but every CAPTCHA fails with `ERROR_CAPTCHA_UNSOLVABLE`. Used by the Docker
+PoW-only pages but every CAPTCHA fails with `ERROR_CAPTCHA_UNSOLVABLE`. `text` says which `ImageToTextTask` modules can be
+imported here (weights are only checked on use). `load` counts WAF tasks and synchronous
+tasks (`classify_*` covers both classifications and `ImageToTextTask`). Used by the Docker
 healthcheck.
 
 ## Error codes
@@ -247,15 +305,15 @@ healthcheck.
 | errorCode | returned by | when |
 |---|---|---|
 | `ERROR_KEY_DENIED_ACCESS` | every POST | `clientKey` missing (`clientKey is required`) or not in `keys.json` / `AWSCS_KEYS` (`invalid clientKey`) |
-| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
-| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, or a classification question family other than `grid` / `toycarcity` |
+| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; `ImageToTextTask` without `body`, with an unknown `module` or bad `case` / `numeric` / `minLength` / `maxLength`; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
+| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, a classification question family other than `grid` / `toycarcity`, or an `ImageToTextTask` / `BlsClassification` model that is not installed |
 | `ERROR_TASKID_INVALID` | getTaskResult | unknown, expired, or another key's `taskId` |
 | `ERROR_CAPTCHA_UNSOLVABLE` | task result / classification | every CAPTCHA round failed, unsupported problem type, vision unavailable, or an internal solver error |
 | `ERROR_PROXY_CONNECT_REFUSED` | task result | the proxy failed, refused the connection, timed out connecting, or answered 407 (proxy authentication) |
 | `ERROR_PROXY_BANNED` | task result | a WAF endpoint answered HTTP 403 / 429 through the proxy (the proxy IP is blocked or rate limited) |
 | `ERROR_SITE_UNREACHABLE` | task result | DNS failure, connection or TLS error (without a proxy), too many redirects, oversized or unexpected reply from the site or the WAF endpoints |
 | `ERROR_TASK_TIMEOUT` | task result / classification | the task exceeded `AWSCS_TASK_TIMEOUT`, a network call timed out, or classification exceeded `AWSCS_CLASSIFY_TIMEOUT` |
-| `ERROR_NO_SLOT_AVAILABLE` | createTask | `AWSCS_MAX_PENDING` tasks are already queued or running; retry later |
+| `ERROR_NO_SLOT_AVAILABLE` | createTask | `AWSCS_MAX_PENDING` tasks are already queued or running, or the synchronous (classification / text) runners and queue are full; retry later |
 | `ERROR_SERVICE_UNAVAILABLE` | createTask / any | the service is shutting down; with HTTP 500, an unexpected internal error |
 
 Example of each shape:
@@ -299,7 +357,8 @@ when it changes):
 | `AWSCS_POW_PROCESSES` | CPU count | hashcash worker processes |
 | `AWSCS_CAPTCHA_ROUNDS` | `5` | puzzles to attempt before giving up |
 | `AWSCS_VERIFY_TOKEN` | `1` | re-fetch the page with the PoW token to detect a CAPTCHA action |
-| `AWSCS_WARMUP` | `1` | preload the vision model at startup |
+| `AWSCS_WARMUP` | `1` | preload the vision, BLS and text models at startup |
+| `AWSCS_TEXT_DEFAULT_MODULE` | `common` | `ImageToTextTask` module used when the task names none (`bls_poland`, `common`, `ddddocr` or an alias; an unknown value is ignored with a warning) |
 | `AWSCS_MAX_BODY_BYTES` | `4194304` | request body limit |
 | `AWSCS_ALLOW_PRIVATE` | `0` | allow `websiteURL` / WAF hosts that resolve to private addresses (SSRF guard off) |
 | `AWSCS_LOG_LEVEL` | `INFO` | log level (same as `--log-level`) |
