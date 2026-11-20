@@ -88,55 +88,99 @@ about 12 dB above the background. The user only has to type ONE of the two words
    clips the peak was at least 0.86; elsewhere it was at most 0.5.
 3. Cut the loud runs after it: a hysteresis threshold of -9/-14 dB relative to the
    instruction voice, padded with silence.
-4. Decode both runs in one CTranslate2 batch with faster-whisper `medium.en` (int8, beam 5)
-   and a 20 s encoder window instead of 30 s. Then normalise the text (abbreviations,
-   numbers) and remove the repetition loops that a short window can cause.
-5. Return the most confident single word, scored by mean logprob with penalties for
-   several words, extra BPE tokens and no_speech.
-   If the template is not found, fall back to a whole-clip transcription.
+4. Decode both runs in one CTranslate2 batch with faster-whisper `medium.en` (int8, beam 5,
+   all 5 beam hypotheses kept) and a 20 s encoder window instead of 30 s. Then normalise
+   the text (abbreviations, numbers) and remove the repetition loops that a short window
+   can cause.
+5. Get a second opinion: decode the same runs with `small.en` and a 10 s window
+   (`AWS_CAPSOLVER_AUDIO_SECOND_MODEL`, set it to "" to turn it off).
+6. Choose the answer:
+   - A single word that both models agree on wins (leading "a"/"the"/"one" are ignored).
+   - Otherwise the primary model's most confident single word wins. It is scored by mean
+     logprob, with penalties for several words, extra BPE tokens and no_speech.
+   - Plural-stem rule: "feelings" becomes "feeling" when the stem is one BPE token and
+     another beam hypothesis spells it within 0.5 logprob.
+   - If the template is not found, fall back to a whole-clip transcription.
 
-The model loads once, lazily, behind a lock. Calls into the model are serialised.
+The models load once, lazily, behind a lock. Calls into each model are serialised.
 
 - Env vars: `AWS_CAPSOLVER_AUDIO_MODEL` (a size name or a local CTranslate2 directory),
-  `AWS_CAPSOLVER_AUDIO_WINDOW` (seconds, default 20) and `AWS_CAPSOLVER_AUDIO_THREADS`
-  (default 8).
+  `AWS_CAPSOLVER_AUDIO_SECOND_MODEL` (default `small.en`), `AWS_CAPSOLVER_AUDIO_WINDOW`
+  (seconds, default 20), `AWS_CAPSOLVER_AUDIO_STEM_MARGIN` (default 0.5) and
+  `AWS_CAPSOLVER_AUDIO_THREADS` (default 8).
 - First download:
-  `python -c "from faster_whisper.utils import download_model as d; d('medium.en')"`
-  stores about 1.5 GB in `~/.cache/huggingface/hub`. Run with `HF_HUB_OFFLINE=1` after
+  `python -c "from faster_whisper.utils import download_model as d; d('medium.en'); d('small.en')"`
+  stores about 2 GB in `~/.cache/huggingface/hub`. Run with `HF_HUB_OFFLINE=1` after
   that.
 
-**Accuracy.** There is no oracle, so labels come from the agreement of independent models
-on each word cut: large-v3 and distil-large-v3 (both with a 30 s window) plus small.en.
-A word counts when at least 2 of the 3 agree. 1 held-out clip was labelled manually.
-The production model is not one of the voters.
-An answer is correct when it is in the clip's label set. A clip whose voters agreed on
-only one word therefore counts a correct second word as wrong, so these numbers are a
-lower bound.
+**Labels.** There is no oracle, so labels come from the agreement of independent models
+on each word cut.
+- v1: a word counts when at least 2 of 3 voters agree: large-v3 and distil-large-v3 (both
+  with a 30 s window) plus small.en with the stock pipeline.
+- v2: v1 plus every word that 2 of 4 voters agree on. The fourth voter is large-v3
+  re-run, with word timestamps, on the cut words of all 184 clips where the voters
+  disagreed. Quiet words that leaked in from the background are dropped. This is add-only
+  and was applied to both splits without looking at the answers. It added 16 words on dev
+  (16 clips) and 17 on test (17 clips).
+- strict: only large-v3, large-v3 with word timestamps and distil-large-v3. small.en is
+  left out because it is also the second-opinion model.
 
-| model, window | dev (n=168) | held-out (n=227) | latency per clip, mean (16 threads, idle box) |
-|---|---|---|---|
-| tiny.en, 10 s | 70.7 % | – | 0.46 s (loaded box) |
-| base.en, 10 s | 80.8 % | – | 0.64 s (loaded box) |
-| small.en, 10 s | 85.6 % | – | 0.6 s |
-| small.en, 30 s | 89.8 % | – | 1.6 s |
-| medium.en, 10 s | 89.9 % | – | 0.9 s |
-| **medium.en, 20 s (default)** | 91.1 % | **94.3 % (214/227)** | 2.5 s (p95 3.0 s, max 4.3 s) |
-| medium.en, 30 s | 93.5 % | – | 3.9 s |
-| large-v3-turbo, 30 s | – | – | 6.8 s |
+1 held-out clip is labelled by hand. The test split (a hash of the clip id) is frozen;
+all tuning used dev. An answer is correct when it is in the clip's label set.
 
-Dev scores for every row except medium.en at 20 s come from cached per-word decodes. The
-tiny.en and base.en dev scores were measured against an earlier version of the dev labels.
+| step | dev v1 | dev v2 | test v1 | test v2 | test strict |
+|---|---|---|---|---|---|
+| medium.en, 20 s window | 92.9 % | 95.8 % | 94.3 % | 94.3 % | 93.9 % |
+| + plural-stem rule (margin 0.5) | 93.5 % | 96.4 % | 94.3 % | 94.3 % | 93.9 % |
+| + small.en second opinion | 96.4 % | **98.2 %** | 96.0 % | 96.1 % | 95.2 % |
 
-Most of the 13 held-out misses fall into three groups:
-- a plural "s" from the background joined to the word (`locations`, `notions`, `feelings`);
-- a garbled word chosen over the clean one;
-- a word that the voters did not agree on, so it is missing from the label set.
+These are offline simulations over cached per-word decodes. Dev n=168. Test n=227 under v1
+and n=228 under v2 and strict.
 
-The 98 % target has not been reached.
+**Final end-to-end held-out run** (the shipped defaults, labels v2): **95.2 % (217/228)**.
+Latency per clip: mean 2.96 s, p95 3.06 s, max 4.43 s (16 threads, both models).
+
+The end-to-end run is 2 clips below the 96.1 % simulation. The simulation reused a small.en
+decode cached at a different thread count, and int8 CTranslate2 results vary slightly with
+the thread count. The plural-stem rule helps on dev only.
+
+Other variants tried:
+- Trimming the end of each word cut lost 2–5 points on dev.
+- Letting the second model confirm a non-top hypothesis of the primary lost 1–1.5 points.
+
+**98 % is reached on dev but not on held-out data.** The 11 held-out misses that remain
+are:
+- garbled cuts where both models are wrong (`whismations`, `reflec`, `disting`);
+- background speech fused with the word (`source` for "gender");
+- plural or derived forms (`feelings`, `notions`, `constant`);
+- answers that are probably right but missing from the label set (`regarding`, `settle`).
+
+The gains have flattened. The next lever would be a better separation of the target voice
+from the background (a source-separation model or a speaker-conditioned mask), not more
+ASR tweaks.
+
+| model, window (single model, labels v1) | dev | latency per clip, mean |
+|---|---|---|
+| tiny.en, 10 s | 70.7 % | 0.46 s |
+| base.en, 10 s | 80.8 % | 0.64 s |
+| small.en, 10 s | 85.6 % | 0.6 s |
+| small.en, 30 s | 89.8 % | 1.6 s |
+| medium.en, 10 s | 89.9 % | 0.9 s |
+| medium.en, 20 s | 92.9 % | 2.5 s |
+| medium.en, 30 s | 93.5 % | 3.9 s |
+| large-v3-turbo, 30 s | – | 6.8 s |
+
+The tiny.en and base.en dev scores were measured against an earlier version of the dev
+labels.
 
 ```bash
 .venv/bin/python tools/collect_audio.py --max 50       # read-only GET /problem, >= 3 s apart
 .venv/bin/python tools/bench_audio.py transcribe --model large-v3 --window 30
-.venv/bin/python tools/bench_audio.py label --models large-v3@30s distil-large-v3@30s small.en
-.venv/bin/python tools/bench_audio.py eval --model medium.en --window 20 --split test
+.venv/bin/python tools/bench_audio.py wordrun             # large-v3 word timestamps, disputed clips
+.venv/bin/python tools/bench_audio.py label --models large-v3-wt large-v3@30s \
+    distil-large-v3@30s small.en --union data/audio/labels_v1.json
+.venv/bin/python tools/bench_audio.py simulate --primary medium.en@20s --second small.en@10s \
+    --margins 0 0.5
+.venv/bin/python tools/bench_audio.py eval --model medium.en --window 20 --second small.en \
+    --split test
 ```

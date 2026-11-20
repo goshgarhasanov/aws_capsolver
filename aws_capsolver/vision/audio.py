@@ -26,7 +26,7 @@ Model download and offline use
 The CTranslate2 model is fetched once from the Hugging Face hub (Systran/faster-whisper-*)
 into the standard cache (~/.cache/huggingface/hub, or $HF_HOME). Pre-fetch it with
 
-    python -c "from faster_whisper.utils import download_model as d; d('medium.en')"
+    python -c "from faster_whisper.utils import download_model as d; d('medium.en'); d('small.en')"
 
 and run with HF_HUB_OFFLINE=1 afterwards. AWS_CAPSOLVER_AUDIO_MODEL accepts a model size
 name (tiny.en ... large-v3) or a path to a local CTranslate2 model directory;
