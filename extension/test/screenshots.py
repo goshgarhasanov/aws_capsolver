@@ -83,6 +83,16 @@ def main():
                     page.wait_for_timeout(300)
                     page.screenshot(path=str(OUT / f"options-{scheme}.png"), full_page=True)
                     print("wrote", scheme)
+                # the on-page badge in manual mode (Solve button next to the captcha)
+                page.evaluate("""async () => { const { settings } = await chrome.storage.local.get('settings');
+                    await chrome.storage.local.set({ settings: Object.assign(settings, { autoSolve: false }) }); }""")
+                shot = ctx.new_page()
+                shot.set_viewport_size({"width": 520, "height": 300})
+                shot.goto(f"http://127.0.0.1:{PORT}/blspl/login?img=cap-4ot0qvfu3q5.jpg")
+                shot.wait_for_selector("captchosa-badge", state="attached", timeout=10000)
+                shot.wait_for_timeout(800)
+                shot.screenshot(path=str(OUT / "page-badge.png"), clip={"x": 0, "y": 70, "width": 520, "height": 170})
+                print("wrote page badge")
             finally:
                 ctx.close()
     finally:

@@ -92,21 +92,27 @@ function renderSolvers() {
     const on = settings.solvers[kind];
     const row = el("div", `solver${on ? "" : " off"}`);
     row.dataset.kind = kind;
-    row.append(el("span", "name", t(`kind_${kind}`)));
-    row.append(makeSwitch(`solver-${kind}`, on, t(`kind_${kind}`),
-      (v) => persist({ solvers: Object.assign({}, settings.solvers, { [kind]: v }) })));
-    row.append(el("span", "desc", t(`desc_${kind}`)));
-    const meta = el("div", "meta");
+    const info = el("div", "info");
+    info.append(el("span", "name", t(`kind_${kind}`)));
+    const last = st.last;
+    const sub = el("span", `sub${last ? (last.ok ? " ok" : " err") : ""}`);
+    if (last) {
+      sub.append(el("span", "lastdot"), document.createTextNode(ago(last.ts)));
+      sub.title = `${new Date(last.ts).toLocaleString(uiLocale())} – ${last.detail || ""}`;
+    } else {
+      sub.textContent = t(`desc_${kind}`);
+    }
+    if (isOptions && last) sub.append(document.createTextNode(` · ${t(`desc_${kind}`)}`));
+    info.title = t(`desc_${kind}`);
+    info.append(sub);
+    const counts = el("div", "counts");
     const ok = el("span", `chip ok${st.solved ? "" : " zero"}`, `✓ ${num(st.solved)}`);
     ok.title = `${num(st.solved)} ${t("solvedCount")}`;
     const bad = el("span", `chip err${st.failed ? "" : " zero"}`, `✕ ${num(st.failed)}`);
     bad.title = `${num(st.failed)} ${t("failedCount")}`;
-    const last = st.last;
-    const when = el("span", `when${last ? (last.ok ? " ok" : " err") : ""}`);
-    when.append(el("span", "lastdot"), document.createTextNode(last ? ago(last.ts) : t("never")));
-    when.title = last ? `${new Date(last.ts).toLocaleString(uiLocale())} – ${last.detail || ""}` : "";
-    meta.append(ok, bad, when);
-    row.append(meta);
+    counts.append(ok, bad);
+    row.append(info, counts, makeSwitch(`solver-${kind}`, on, t(`kind_${kind}`),
+      (v) => persist({ solvers: Object.assign({}, settings.solvers, { [kind]: v }) })));
     box.append(row);
   }
   if (focused && $(focused)) $(focused).focus(); // keep keyboard focus across re-renders
@@ -148,12 +154,18 @@ function renderForm() {
   setChecked("pageBadge", settings.pageBadge);
   if ($("delayMs") && document.activeElement !== $("delayMs")) $("delayMs").value = Math.min(5000, settings.delayMs);
   if ($("delayOut")) $("delayOut").textContent = `${num(settings.delayMs)} ${t("ms")}`;
+  paintRange();
   if ($("retries") && document.activeElement !== $("retries")) $("retries").value = settings.retries;
   if ($("lang")) $("lang").value = settings.lang;
   if ($("serviceUrl") && document.activeElement !== $("serviceUrl")) $("serviceUrl").value = settings.serviceUrl;
   if ($("clientKey") && document.activeElement !== $("clientKey")) $("clientKey").value = settings.clientKey;
   const v = chrome.runtime.getManifest();
   $("versionName").textContent = `v${v.version_name || v.version}`;
+}
+
+function paintRange() {
+  const r = $("delayMs");
+  if (r) r.style.setProperty("--fill", `${(Number(r.value) / Number(r.max)) * 100}%`);
 }
 
 function renderStatus() {
@@ -264,7 +276,10 @@ function bind() {
   for (const id of ["autoSolve", "submitAfterFill", "blsGridSubmit", "pageBadge"]) {
     on(id, "change", (e) => persist({ [id]: e.target.checked }));
   }
-  on("delayMs", "input", (e) => { $("delayOut").textContent = `${num(Number(e.target.value))} ${t("ms")}`; });
+  on("delayMs", "input", (e) => {
+    $("delayOut").textContent = `${num(Number(e.target.value))} ${t("ms")}`;
+    paintRange();
+  });
   on("delayMs", "change", (e) => persist({ delayMs: e.target.value }));
   on("retries", "change", (e) => persist({ retries: e.target.value }));
   on("retriesDown", "click", () => persist({ retries: settings.retries - 1 }));

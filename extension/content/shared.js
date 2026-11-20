@@ -211,15 +211,21 @@
       this.host.style.display = settings.enabled && settings.pageBadge ? "" : "none";
     }
 
-    // Put the pill just above the captcha's top-right corner, never over it.
+    // Put the pill beside the captcha (right, else above, else below), never over it.
     reposition() {
       if (!this.anchor || !this.anchor.isConnected) return;
       const r = this.anchor.getBoundingClientRect();
-      const w = this.pill.offsetWidth || 160;
-      const h = this.pill.offsetHeight || 24;
-      let top = r.top - h - 6;
-      if (top < 4) top = Math.min(innerHeight - h - 4, r.bottom + 6);
-      const left = Math.max(4, Math.min(innerWidth - w - 4, r.right - w));
+      const w = this.pill.offsetWidth || 180;
+      const h = this.pill.offsetHeight || 30;
+      let left;
+      let top;
+      if (r.right + 8 + w <= innerWidth - 4) {
+        left = r.right + 8;
+        top = Math.max(4, Math.min(innerHeight - h - 4, r.top + Math.min(r.height, 120) / 2 - h / 2));
+      } else {
+        left = Math.max(4, Math.min(innerWidth - w - 4, r.right - w));
+        top = r.top - h - 6 >= 4 ? r.top - h - 6 : Math.min(innerHeight - h - 4, r.bottom + 6);
+      }
       this.pill.style.top = `${Math.round(top)}px`;
       this.pill.style.left = `${Math.round(left)}px`;
     }
