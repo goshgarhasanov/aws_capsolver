@@ -203,6 +203,22 @@ def nopecha_like_page(n, imgs):
 </body></html>"""
 
 
+def nopecha_docwrite_page(n, imgs):
+    """Exactly like the real demo: empty iframes filled with document.write (about:blank)."""
+    srcs = json.dumps([f"/blspl/captcha.jpg?img={html.escape(imgs[i % len(imgs)])}" for i in range(n)])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>nopecha-docwrite</title>
+<style>iframe {{ width: 240px; height: 130px; }}</style></head><body><div id="parent"></div><script>
+function create_iframe(src) {{
+  const f = document.createElement('iframe'); f.src = ''; document.querySelector('#parent').append(f);
+  const doc = f.contentWindow.document; doc.open();
+  doc.write(`<html><body><div class='parent'><div class='image'><img class='captchapict' src='${{src}}'
+    style='width:200px;height:80px'></div><input class='captcha' type='text' placeholder='Answer'></div></body></html>`);
+  doc.close();
+}}
+document.addEventListener('DOMContentLoaded', () => {srcs}.forEach(create_iframe));
+</script></body></html>"""
+
+
 def generic_variant_page(variant, img, port):
     body = GENERIC_VARIANTS[variant].format(img=html.escape(img), port=port)
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>generic {variant}</title></head>
@@ -264,6 +280,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/generic/nopecha":
             imgs = sorted(p.name for p in BLS_PL.glob("*.jpg"))[:6] or ["cap-br7bzbh49g8.jpg"]
             return self._send(200, nopecha_like_page(int(q.get("n", "12")), imgs))
+        if path == "/generic/nopecha_docwrite":
+            imgs = sorted(p.name for p in BLS_PL.glob("*.jpg"))[:6] or ["cap-br7bzbh49g8.jpg"]
+            return self._send(200, nopecha_docwrite_page(int(q.get("n", "8")), imgs))
         if path == "/generic/nopecha_frame":
             return self._send(200, NOPECHA_FRAME.format(img=html.escape(Path(q.get("img", "")).name)))
         if path == "/static/logo.jpg":

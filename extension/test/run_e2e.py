@@ -384,6 +384,13 @@ def scenarios(context, args):
     check("general text [nopecha-like 12 iframes]: every captcha filled", got, repr(nopecha_filled()))
     page.close()
 
+    # the real demo writes its iframes with document.write (about:blank frames)
+    page = context.new_page()
+    page.goto(f"{FIX}/generic/nopecha_docwrite?n=8")
+    got = wait_until(lambda: (lambda v: len(v) == 8 and all(x == "aB3dE" for x in v))(nopecha_filled()), 120)
+    check("general text [nopecha document.write iframes]: every captcha filled", got, repr(nopecha_filled()))
+    page.close()
+
     # switching the general solver off stops it live
     ext.settings(solvers={"text": False})
     page = context.new_page()
