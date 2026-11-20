@@ -401,3 +401,179 @@ def test_solve_website_captcha_endpoint_from_refreshed_page(fake_session, monkey
     assert out.token == "CAPTOK" and out.used_captcha
     verify_body = json.loads([c for c in fake_session.calls if "/verify?" in c[1]][0][2]["data"])
     assert verify_body["goku_props"]["key"] == "AQIDAHjFAKEKEY=="
+
+
+# --- learned PoW kind --------------------------------------------------------------------
+from aws_capsolver.waf import challenge as challengemod  # noqa: E402
+from aws_capsolver.waf import pow as powlib  # noqa: E402
+
+
+def _pow_routes(session, mp_status=400, verify_status=200):
+    session.add("GET", f"{TOKEN_BASE}/inputs", _inputs(HASH_A9F))
+    session.add("POST", f"{TOKEN_BASE}/mp_verify",
+                lambda kw: (mp_status, {"token": "TOKEN-BW"} if mp_status == 200 else {}))
+    session.add("POST", f"{TOKEN_BASE}/verify",
+                lambda kw: (verify_status, {"token": "TOKEN-SCRYPT"}
+                            if verify_status == 200 else {}))
+
+
+def _verify_urls(session):
+    return [c[1].rsplit("/", 1)[-1] for c in session.calls if c[0] == "POST"]
+
+
+def test_learned_kind_is_tried_first(fake_session):
+    assert challengemod.candidate_kinds(HASH_A9F)[0] == powlib.KIND_BANDWIDTH
+    _pow_routes(fake_session)
+    no_sleep = dict(sleep=lambda s: None, processes=1)
+    assert solve_challenge(fake_session, TOKEN_BASE, "d", **no_sleep) == "TOKEN-SCRYPT"
+    assert _verify_urls(fake_session) == ["mp_verify", "verify"]
+    assert challengemod._LEARNED == {HASH_A9F: powlib.KIND_SCRYPT}
+    assert challengemod.candidate_kinds(HASH_A9F) == [
+        powlib.KIND_SCRYPT, powlib.KIND_BANDWIDTH, powlib.KIND_SHA256]
+
+    fake_session.calls.clear()
+    assert solve_challenge(fake_session, TOKEN_BASE, "d", **no_sleep) == "TOKEN-SCRYPT"
+    assert _verify_urls(fake_session) == ["verify"]  # one /verify, no bandwidth detour
+
+
+def test_learned_kind_forgotten_after_400(fake_session):
+    challengemod.remember_kind(HASH_A9F, powlib.KIND_SCRYPT)
+    # the endpoint switched back: scrypt now gets 400, bandwidth is accepted
+    _pow_routes(fake_session, mp_status=200, verify_status=400)
+    assert solve_challenge(fake_session, TOKEN_BASE, "d", sleep=lambda s: None,
+                           processes=1) == "TOKEN-BW"
+    assert _verify_urls(fake_session) == ["verify", "mp_verify"]
+    assert challengemod._LEARNED == {HASH_A9F: powlib.KIND_BANDWIDTH}
+
+    fake_session.calls.clear()
+    challengemod.forget_kind(HASH_A9F, powlib.KIND_BANDWIDTH)
+    assert challengemod.candidate_kinds(HASH_A9F) == challengemod.CANDIDATES[HASH_A9F]
+    assert solve_challenge(fake_session, TOKEN_BASE, "d") == "TOKEN-BW"
+    assert _verify_urls(fake_session) == ["mp_verify"]
+
+
+def test_learned_kind_forgotten_when_all_rejected(fake_session):
+    challengemod.remember_kind(HASH_A9F, powlib.KIND_SCRYPT)
+    _pow_routes(fake_session, mp_status=400, verify_status=400)
+    with pytest.raises(SolverError):
+        solve_challenge(fake_session, TOKEN_BASE, "d", sleep=lambda s: None, processes=1)
+    assert challengemod._LEARNED == {}
+    assert challengemod.candidate_kinds(HASH_A9F) == challengemod.CANDIDATES[HASH_A9F]
+
+
+def test_forget_kind_only_drops_matching_kind():
+    challengemod.remember_kind(HASH_A9F, powlib.KIND_SCRYPT)
+    challengemod.forget_kind(HASH_A9F, powlib.KIND_BANDWIDTH)  # a different kind failed
+    assert challengemod._LEARNED == {HASH_A9F: powlib.KIND_SCRYPT}
+
+
+# --- PoW in parallel with the captcha ----------------------------------------------------
+import threading  # noqa: E402
+
+from .conftest import FakeSession  # noqa: E402
+
+PROBLEM_URL = f"{CAPTCHA_BASE}/problem"
+
+
+def _two_sessions(monkeypatch):
+    """make_session -> the captcha (main) session first, then the PoW thread's session."""
+    main, pow_session = FakeSession(), FakeSession()
+    queue = [main, pow_session]
+
+    def make(proxy, ua):
+        s = queue.pop(0)
+        s.headers.update({"user-agent": ua or "UA-default"})
+        return s
+
+    monkeypatch.setattr(solvermod, "make_session", make)
+    return main, pow_session
+
+
+def _captcha_routes(session, voucher_handler=None):
+    session.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    session.add("POST", f"{CAPTCHA_BASE}/verify",
+                lambda kw: (200, {"success": True, "captcha_voucher": "V"}))
+    session.add("POST", f"{TOKEN_BASE}/voucher", voucher_handler or (
+        lambda kw: (200, {"token": "CAPTOK"})))
+
+
+def _problem_request():
+    return solvermod.SolveRequest("https://shop.example/", problem_url=PROBLEM_URL)
+
+
+def test_parallel_pow_token_goes_to_voucher(monkeypatch, fake_vision):
+    main, pow_session = _two_sessions(monkeypatch)
+    captcha_done = threading.Event()
+
+    def slow_inputs(kw):
+        captcha_done.wait(5)  # PoW finishes only after the captcha answer was verified
+        return _inputs(HASH_A9F)(kw)
+
+    pow_session.add("GET", f"{TOKEN_BASE}/inputs", slow_inputs)
+    pow_session.add("POST", f"{TOKEN_BASE}/mp_verify", lambda kw: (200, {"token": "POW"}))
+    main.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    main.add("POST", f"{CAPTCHA_BASE}/verify",
+             lambda kw: captcha_done.set() or (200, {"success": True, "captcha_voucher": "V"}))
+    main.add("POST", f"{TOKEN_BASE}/voucher", lambda kw: (200, {"token": "CAPTOK"}))
+
+    started = time.monotonic()
+    out = solvermod.solve_website(_problem_request(), solvermod.SolverSettings(),
+                                  deadline=time.monotonic() + 30)
+    assert time.monotonic() - started < 5  # did not wait out the 5 s event timeout
+    assert out.token == "CAPTOK" and out.used_captcha and out.voucher == "V"
+    voucher_calls = [c for c in main.calls if "/voucher" in c[1]]
+    assert len(voucher_calls) == 1
+    assert voucher_calls[0][2]["json"] == {"captcha_voucher": "V", "existing_token": "POW"}
+    # the PoW ran on its own session, the captcha on the main one
+    assert all("token.awswaf.com" in c[1] and "/voucher" not in c[1] for c in pow_session.calls)
+    assert not any(c[1].endswith("/inputs") for c in main.calls)
+    assert pow_session.headers["user-agent"] == main.headers["user-agent"]
+
+
+def test_parallel_pow_failure_raises(monkeypatch, fake_vision):
+    main, pow_session = _two_sessions(monkeypatch)
+    pow_session.add("GET", f"{TOKEN_BASE}/inputs", lambda kw: (500, {}))
+    _captcha_routes(main)
+    started = time.monotonic()
+    with pytest.raises(SolverError) as err:
+        solvermod.solve_website(_problem_request(), solvermod.SolverSettings(),
+                                deadline=time.monotonic() + 30)
+    assert time.monotonic() - started < 5
+    assert err.value.code == "ERROR_SITE_UNREACHABLE" and err.value.http_status == 500
+    assert not any("/voucher" in c[1] for c in main.calls)  # no voucher without a PoW token
+
+
+def test_parallel_captcha_failure_does_not_wait_for_pow(monkeypatch, fake_vision):
+    main, pow_session = _two_sessions(monkeypatch)
+    release = threading.Event()
+
+    def stuck_inputs(kw):
+        release.wait(10)
+        return 500, {}
+
+    pow_session.add("GET", f"{TOKEN_BASE}/inputs", stuck_inputs)
+    main.add("GET", f"{CAPTCHA_BASE}/problem", lambda kw: (200, grid_problem()))
+    main.add("POST", f"{CAPTCHA_BASE}/verify",
+             lambda kw: (200, {"success": False, "problem": grid_problem()}))
+    started = time.monotonic()
+    try:
+        with pytest.raises(SolverError) as err:
+            solvermod.solve_website(_problem_request(),
+                                    solvermod.SolverSettings(captcha_rounds=2),
+                                    deadline=time.monotonic() + 30)
+        assert time.monotonic() - started < 5  # PoW still blocked: we did not join it
+        assert "answer rejected" in err.value.description
+        assert not any("/voucher" in c[1] for c in main.calls)
+    finally:
+        release.set()
+
+
+def test_captcha_string_existing_token_still_works(fake_session, fake_vision):
+    _captcha_routes(fake_session, lambda kw: (200, {"token": "FINAL"})
+                    if kw["json"]["existing_token"] == "POW" else (400, {}))
+    result = cap.solve_captcha(fake_session, _ctx(), existing_token="POW")
+    assert result.token == "FINAL" and result.voucher == "V"
+    called = []
+    result = cap.solve_captcha(fake_session, _ctx(),
+                               existing_token=lambda: called.append(1) or "POW")
+    assert result.token == "FINAL" and called == [1]

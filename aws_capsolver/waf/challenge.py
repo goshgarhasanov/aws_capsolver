@@ -40,8 +40,36 @@ CANDIDATES: Dict[str, List[str]] = {
 }
 
 
+# challenge_type -> the kind /verify last accepted. Tried first next time, so a mapping that
+# differs from CANDIDATES costs one rejected /verify per process instead of one per solve
+# (measured on a live endpoint, Nov 2026: ha9faaff... wants scrypt, the bandwidth try wasted
+# ~0.5 s on every solve).
+_LEARNED: Dict[str, str] = {}
+_LEARNED_LOCK = threading.Lock()
+
+
 def candidate_kinds(challenge_type: str) -> List[str]:
-    return CANDIDATES.get(challenge_type, ALL_KINDS)
+    kinds = list(CANDIDATES.get(challenge_type, ALL_KINDS))
+    with _LEARNED_LOCK:
+        learned = _LEARNED.get(challenge_type)
+    if learned in kinds:
+        kinds.remove(learned)
+        kinds.insert(0, learned)
+    return kinds
+
+
+def remember_kind(challenge_type: str, kind: str) -> None:
+    with _LEARNED_LOCK:
+        if _LEARNED.get(challenge_type) != kind:
+            logger.info("pow type=%s.. -> kind=%s learned (tried first from now on)",
+                        challenge_type[:10], kind)
+        _LEARNED[challenge_type] = kind
+
+
+def forget_kind(challenge_type: str, kind: str) -> None:
+    with _LEARNED_LOCK:
+        if _LEARNED.get(challenge_type) == kind:
+            del _LEARNED[challenge_type]
 
 
 def check_stop(deadline: Optional[float], cancel: Optional[threading.Event],
@@ -155,6 +183,7 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
         except SolverError as exc:
             if exc.http_status == 400:
                 logger.warning("pow kind=%s rejected (400), trying next candidate", kind)
+                forget_kind(challenge_type, kind)
                 last_error = SolverError(ERROR_CAPTCHA_UNSOLVABLE, exc.description)
                 sleep(0.2)
                 continue
@@ -163,5 +192,6 @@ def solve_challenge(session: requests.Session, token_base: str, domain: str, *,
         if not isinstance(token, str) or not token:
             raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"verify returned no token "
                               f"(keys={sorted(result)})")
+        remember_kind(challenge_type, kind)
         logger.info("pow token acquired in %.2fs (kind=%s)", time.monotonic() - started, kind)
         return token

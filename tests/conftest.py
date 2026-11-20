@@ -152,3 +152,12 @@ def no_network(request, monkeypatch):
         return real_connect(sock, address)
 
     monkeypatch.setattr(socket.socket, "connect", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _reset_learned_pow_kinds():
+    """The learned challenge_type -> PoW kind cache is process-wide; isolate every test."""
+    from aws_capsolver.waf import challenge
+    challenge._LEARNED.clear()
+    yield
+    challenge._LEARNED.clear()

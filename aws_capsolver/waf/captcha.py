@@ -199,7 +199,7 @@ class CaptchaResult:
 
 
 def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
-                  existing_token: Optional[str] = None, kinds: tuple = ("visual", "audio"),
+                  existing_token: Any = None, kinds: tuple = ("visual", "audio"),
                   max_rounds: int = 5, timeout: float = 20.0,
                   deadline: Optional[float] = None, redeem: bool = True,
                   cancel: Optional[threading.Event] = None) -> CaptchaResult:
@@ -217,6 +217,7 @@ def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
         if rounds >= max_rounds:
             break
         check_stop(deadline, cancel, "captcha")
+        t_fetch = time.monotonic()
         try:
             problem: Optional[Dict[str, Any]] = fetch_problem(session, ctx, kind, timeout,
                                                               deadline)
@@ -224,6 +225,7 @@ def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
             logger.info("captcha kind=%s: cannot fetch a problem: %s", kind, exc.description)
             last_error = exc
             continue
+        fetch_ms = int((time.monotonic() - t_fetch) * 1000)
         while problem is not None and rounds < max_rounds:
             check_stop(deadline, cancel, "captcha")
             rounds += 1
@@ -238,20 +240,32 @@ def solve_captcha(session: requests.Session, ctx: CaptchaContext, *,
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             check_stop(deadline, cancel, "captcha")
             # a human never answers in a few ms; report a plausible solve time
+            t_verify = time.monotonic()
             verdict = submit_solution(session, ctx, problem, solution,
                                       max(elapsed_ms, 3500 + 400 * rounds), timeout, deadline)
+            verify_ms = int((time.monotonic() - t_verify) * 1000)
             voucher = verdict.get("captcha_voucher")
             success = verdict.get("success")
-            logger.info("captcha round=%d type=%s success=%s provided=%s required=%s voucher=%s",
+            logger.info("captcha round=%d type=%s success=%s provided=%s required=%s voucher=%s "
+                        "| problem %dms solve %dms verify %dms",
                         rounds, problem.get("problem_type"), success,
                         verdict.get("num_solutions_provided"),
-                        verdict.get("num_solutions_required"), bool(voucher))
+                        verdict.get("num_solutions_required"), bool(voucher),
+                        fetch_ms, elapsed_ms, verify_ms)
+            fetch_ms = 0
             if isinstance(voucher, str) and voucher and success is not False:
                 token = None
                 if redeem:
+                    # existing_token may be a callable: the PoW running in parallel
+                    t_wait = time.monotonic()
+                    existing = existing_token() if callable(existing_token) else existing_token
+                    t_voucher = time.monotonic()
                     token = exchange_voucher(session, ctx, voucher, verdict.get("region") or
-                                             problem.get("region"), existing_token, timeout,
+                                             problem.get("region"), existing, timeout,
                                              deadline)
+                    logger.info("captcha voucher: waited %dms for PoW, /voucher %dms",
+                                int((t_voucher - t_wait) * 1000),
+                                int((time.monotonic() - t_voucher) * 1000))
                 return CaptchaResult(voucher=voucher, token=token, rounds=rounds)
             nxt = verdict.get("problem")
             problem = nxt if isinstance(nxt, dict) and nxt else None

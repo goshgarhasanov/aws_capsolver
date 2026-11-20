@@ -151,6 +151,11 @@ def _solve(session: requests.Session, req: SolveRequest, settings: SolverSetting
         page_status in BLOCK_STATUSES and params.captcha_rendered)
 
     token: Optional[str] = None
+    if captcha_needed and token_base and captcha_base:
+        # The PoW token is only needed for the final /voucher exchange, so run the PoW in
+        # parallel with the captcha (fetch + classify + verify): ~1 s saved per solve.
+        return _solve_parallel(session, req, settings, domain, deadline, params,
+                               token_base, captcha_base, user_agent)
     if token_base:
         token = solve_challenge(session, token_base, domain, timeout=t,
                                 processes=settings.pow_processes, deadline=deadline,
@@ -188,6 +193,58 @@ def _solve(session: requests.Session, req: SolveRequest, settings: SolverSetting
                            timeout=t, deadline=deadline, redeem=bool(token_base),
                            cancel=settings.cancel)
     final = result.token or token
+    if not final and not result.voucher:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "captcha voucher could not be redeemed")
+    return SolveOutcome(token=final, user_agent=user_agent, captcha_rounds=result.rounds,
+                        used_captcha=True, voucher=result.voucher)
+
+
+def _solve_parallel(session: requests.Session, req: SolveRequest, settings: SolverSettings,
+                    domain: str, deadline: Optional[float], params: WafParams,
+                    token_base: str, captcha_base: str, user_agent: str) -> SolveOutcome:
+    """PoW on its own session (same proxy + UA) in a thread, captcha on `session` meanwhile."""
+    t = settings.http_timeout
+    box: dict = {}
+    abandon = threading.Event()  # set when the captcha fails: the PoW is no longer needed
+
+    class _EitherCancel:
+        """is_set() when the service shuts down or the captcha part gave up."""
+        @staticmethod
+        def is_set() -> bool:
+            return abandon.is_set() or (settings.cancel is not None and settings.cancel.is_set())
+
+    def run_pow() -> None:
+        pow_session = make_session(req.proxy_url, user_agent)
+        try:
+            box["token"] = solve_challenge(pow_session, token_base, domain, timeout=t,
+                                           processes=settings.pow_processes, deadline=deadline,
+                                           cancel=_EitherCancel())
+        except BaseException as exc:  # re-raised in the caller's thread
+            box["error"] = exc
+        finally:
+            pow_session.close()
+
+    worker = threading.Thread(target=run_pow, name="pow", daemon=True)
+    worker.start()
+
+    def pow_token() -> Optional[str]:
+        worker.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+        if worker.is_alive():
+            raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "PoW did not finish before the deadline")
+        if "error" in box:
+            raise box["error"]
+        return box.get("token")
+
+    ctx = CaptchaContext(captcha_base=captcha_base, token_base=token_base, domain=domain,
+                         goku_props=params.goku_props, api_key=params.api_key, locale=req.locale)
+    try:
+        result = solve_captcha(session, ctx, existing_token=pow_token,
+                               max_rounds=settings.captcha_rounds, timeout=t, deadline=deadline,
+                               redeem=True, cancel=settings.cancel)
+    except BaseException:
+        abandon.set()  # stop the background PoW instead of letting it burn CPU
+        raise
+    final = result.token or (pow_token() if not worker.is_alive() else None)
     if not final and not result.voucher:
         raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "captcha voucher could not be redeemed")
     return SolveOutcome(token=final, user_agent=user_agent, captcha_rounds=result.rounds,
