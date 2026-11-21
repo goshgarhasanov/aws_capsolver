@@ -62,6 +62,8 @@ class Trocr:
 
 
 def run(args):
+    import torch
+    torch.set_num_threads(args.threads)   # like the service (AWS_CAPSOLVER_TEXT_THREADS)
     from aws_capsolver.text import general
     from aws_capsolver.text import general_model as gm
     engine = general._get_engine()
@@ -141,7 +143,8 @@ def run_trocr(args):
     trocr = Trocr()
     names = args.sources.split(",") if args.sources else [
         n for n in SOURCES if (PACKS / n / "test.json").exists()]
-    out = {}
+    path = Path(_trocr_path(args.out))
+    out = json.loads(path.read_text()) if path.exists() else {}
     for name in names:
         case = SOURCES[name].case_sensitive
         _, labels, images = read_pack(name, "test")
@@ -154,7 +157,7 @@ def run_trocr(args):
             ok += sum(_same(o, l, case) for o, l in zip(outs, labels[i:i + 16]))
         out[name] = {"trocr": round(ok / m, 4), "trocr_n": m, "trocr_ms": round(1000 * dt / m, 1)}
         print(name, out[name], flush=True)
-    Path(_trocr_path(args.out)).write_text(json.dumps(out, indent=1))
+        path.write_text(json.dumps(out, indent=1))   # merged, written after every source
 
 
 def _trocr_path(out: str) -> str:
@@ -222,21 +225,32 @@ def fit(args):
     def pick(sc, w):
         return max(sc, key=lambda s: s[1] + w * s[2]) if sc else None
 
-    best_w, best_acc = 0.0, -1
-    for w in np.round(np.arange(0.0, 1.21, 0.05), 2):
-        acc = np.mean([bool(sc) and _same(pick(sc, w)[0], lab, case) for sc, lab, case, _ in rows])
-        if acc > best_acc + 1e-9:
-            best_w, best_acc = float(w), acc
+    def search(subset):
+        best_w, best_acc = 0.0, -1.0
+        for w in np.round(np.arange(0.0, 1.21, 0.05), 2):
+            acc = np.mean([bool(sc) and _same(pick(sc, w)[0], lab, case)
+                           for sc, lab, case, _ in subset])
+            if acc > best_acc + 1e-9:
+                best_w, best_acc = float(w), float(acc)
+        return best_w, best_acc
+
+    ci = [r for r in rows if not r[2]]
+    cs = [r for r in rows if r[2]]
+    best_w, ci_acc = search(ci)
+    best_w_cs, cs_acc = search(cs) if cs else (best_w, float("nan"))
+    best_acc = (ci_acc * len(ci) + (cs_acc * len(cs) if cs else 0)) / len(rows)
     ours_acc = np.mean([bool(sc) and _same(pick(sc, 0.0)[0], lab, case) for sc, lab, case, _ in rows])
-    print(f"w_dddd={best_w} val acc {best_acc:.4f} (ours alone {ours_acc:.4f})")
+    print(f"w_dddd={best_w} (case-insensitive acc {ci_acc:.4f}), w_dddd_cs={best_w_cs} "
+          f"(case-sensitive acc {cs_acc:.4f}); overall {best_acc:.4f}, ours alone {ours_acc:.4f}")
     # logistic calibration
     X, y = [], []
     for sc, lab, case, tops in rows:
         if not sc:
             continue
-        ranked = sorted(sc, key=lambda s: -(s[1] + best_w * s[2]))
+        wd = best_w_cs if case else best_w
+        ranked = sorted(sc, key=lambda s: -(s[1] + wd * s[2]))
         top = ranked[0]
-        margin = (top[1] + best_w * top[2]) - (ranked[1][1] + best_w * ranked[1][2]) \
+        margin = (top[1] + wd * top[2]) - (ranked[1][1] + wd * ranked[1][2]) \
             if len(ranked) > 1 else 10.0
         agree = 1.0 if tops.get("ours") == tops.get("ddddocr") == top[3] else 0.0
         X.append([top[1], top[2], agree, min(margin, 10.0)])
@@ -264,7 +278,7 @@ def fit(args):
                 print(f"conf {lo_:.2f}-{min(hi_, 1):.2f}: n={int(sel.sum())} "
                       f"acc={float(y[sel].mean()):.3f} mean_conf={float(prob[sel].mean()):.3f}")
     state = torch.load(args.weights, map_location="cpu", weights_only=False)
-    state["ensemble"] = {"w_ours": 1.0, "w_dddd": best_w, "calib": calib,
+    state["ensemble"] = {"w_ours": 1.0, "w_dddd": best_w, "w_dddd_cs": best_w_cs, "calib": calib,
                          "val_acc": round(float(best_acc), 4), "val_n": len(rows)}
     torch.save(state, args.weights)
     print("stored", state["ensemble"], "in", args.weights)
@@ -280,6 +294,7 @@ def main(argv=None):
     ap.add_argument("--weights", default=str(ROOT / "weights/general_ocr.pt"))
     ap.add_argument("--val-per-source", type=int, default=200)
     ap.add_argument("--per-source", type=int, default=200)
+    ap.add_argument("--threads", type=int, default=2, help="torch threads for `run`")
     args = ap.parse_args(argv)
     if args.cmd == "run":
         run(args)

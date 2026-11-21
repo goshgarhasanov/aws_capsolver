@@ -57,7 +57,7 @@ DEFAULT_ENSEMBLE = {"w_ours": 1.0, "w_dddd": 0.5,
 class _Ours:
     def __init__(self, path: Path):
         import torch
-        state = torch.load(str(path), map_location="cpu", weights_only=False)
+        state = torch.load(str(path), map_location="cpu", weights_only=True)
         if state.get("charset") != gm.CHARSET:
             raise ModelUnavailable(f"{path} was trained for another alphabet")
         self.model = gm.build_model()
@@ -86,9 +86,32 @@ class _Dddd:
         if missing:
             raise ModelUnavailable(f"ddddocr charset lacks {''.join(missing)}")
         self.cols = np.array([0] + [index[c] for c in gm.CHARSET], dtype=np.int64)
+        # ddddocr's own session uses one spinning thread per core (and pins them), which
+        # starves everything else for a ~5 ms model; run the same model file lean instead
+        session = self._lean_session(ddddocr, ocr) or session
         self.session = session
         self.input_name = session.get_inputs()[0].name
         self._ocr = ocr   # keeps the session's owner alive
+
+    @staticmethod
+    def _lean_session(ddddocr, ocr):
+        """Single-threaded session on ddddocr's default model file; None if unsure."""
+        try:
+            import onnxruntime as ort
+            engine = ocr.ocr_engine
+            if getattr(engine, "beta", False) or getattr(engine, "use_import_onnx", False):
+                return None
+            path = os.path.join(os.path.dirname(ddddocr.__file__), "common_old.onnx")
+            if not os.path.exists(path):
+                return None
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = int(os.environ.get("GENERAL_OCR_ORT_THREADS", "1"))
+            opts.inter_op_num_threads = 1
+            opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            return ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+        except Exception as exc:  # any surprise: keep ddddocr's own session
+            logger.debug("lean ddddocr session unavailable: %s", exc)
+            return None
 
     def logp(self, gray) -> np.ndarray:
         x = (np.asarray(gray, dtype=np.float32) / 255.0)[None, None]
@@ -374,7 +397,8 @@ def solve(image: bytes, *, charset: Optional[str] = None, min_len: Optional[int]
         return ("", 0.0, {"engines": {}}) if details else ("", 0.0)
 
     ens = engine.ensemble
-    weights = {"ours": float(ens["w_ours"]), "ddddocr": float(ens["w_dddd"])}
+    w_dddd = ens.get("w_dddd_cs", ens["w_dddd"]) if case_sensitive else ens["w_dddd"]
+    weights = {"ours": float(ens["w_ours"]), "ddddocr": float(w_dddd)}
     scored = []
     for p in cands:
         lls = {}

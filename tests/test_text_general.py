@@ -187,8 +187,8 @@ def test_length_limits_shape_the_answer():
 
 @needs_model
 def test_case_sensitive_reading():
-    text, _ = general.solve(_render("AbCdE"), case_sensitive=True)
-    assert text == "AbCdE"
+    text, _ = general.solve(_render("AbGhE"), case_sensitive=True)
+    assert text == "AbGhE"   # letters whose two cases differ in shape, not only size
 
 
 @needs_model
