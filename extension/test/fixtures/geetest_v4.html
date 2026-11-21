@@ -40,6 +40,7 @@ const q = new URLSearchParams(location.search);
 const TYPE = q.get("type") || "slide";
 const BG_SCALE = 280 / 320;        // slide picture: 320x160 shown at 280x140
 const PIECE_MARGIN = 4;            // transparent margin of the 64x64 piece picture
+const RELEASE_JUMP = 4;            // px the live v4 widget moves the piece when the button is released
 const GAP_X = 172;
 const CLICKS = [[60, 70], [230, 110], [140, 260]];
 const NINE = [1, 5, 6];
@@ -102,7 +103,10 @@ function buildSlide() {
     if (!drag) return;
     const d = drag;
     drag = null;
-    const left = parseFloat(slice.style.left || "0");
+    // like the live v4 widget (2captcha demo, Nov 2026): on release the piece is re-placed
+    // RELEASE_JUMP px further right and that final position is what gets verified
+    const left = parseFloat(slice.style.left || "0") + RELEASE_JUMP;
+    slice.style.left = `${left}px`;
     const final = (left + PIECE_MARGIN * BG_SCALE) / BG_SCALE;
     const ys = d.moves.map((m) => m[2]);
     verdict(Math.abs(final - GAP_X) <= 3, { final: Math.round(final * 10) / 10, moves: d.moves.length,

@@ -30,7 +30,7 @@
     "message": "BLS Polonya metin"
   },
   "kind_text": {
-    "message": "Genel metin"
+    "message": "Metin captcha"
   },
   "kind_geetest": {
     "message": "GeeTest"
@@ -48,7 +48,7 @@
     "message": "BLS Polonya girişindeki 5 rakam"
   },
   "desc_text": {
-    "message": "Her sitedeki resimli metin captcha (otomatik algılanır)"
+    "message": "BLS Polonya dahil her resimli metin captcha (otomatik algılanır)"
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: kaydırma, simge/kelime tıklama, dokuzlu ızgara, gobang"

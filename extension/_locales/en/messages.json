@@ -30,7 +30,7 @@
     "message": "BLS Poland text"
   },
   "kind_text": {
-    "message": "General text"
+    "message": "Text captcha"
   },
   "kind_geetest": {
     "message": "GeeTest"
@@ -48,7 +48,7 @@
     "message": "5 digits on the BLS Poland login"
   },
   "desc_text": {
-    "message": "Any image text captcha on any site (detected automatically)"
+    "message": "Any image text captcha, BLS Poland included (detected automatically)"
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: slide, icon/word click, nine-grid, gobang"

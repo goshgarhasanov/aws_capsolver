@@ -28,19 +28,19 @@ SEED = """async ({ mock }) => {
   const min = 60000;
   await chrome.storage.local.set({
     settings: CAPTCHOSA.normalize({ serviceUrl: mock, clientKey: 'demo-key-123', delayMs: 800, retries: 3,
-                                    solvers: { text: false } }),
+                                    solvers: { geetest: false } }),
     stats: {
       awsGrid: { solved: 128, failed: 3, last: { ok: true, ts: now - 2 * min, detail: 'accepted after 1 round(s)' } },
       awsToken: { solved: 14, failed: 1, last: { ok: true, ts: now - 47 * min, detail: 'aws-waf-token set' } },
       blsGrid: { solved: 342, failed: 6, last: { ok: true, ts: now - 5 * min, detail: '748: picked 1,4,7 (submitted)' } },
-      blsText: { solved: 57, failed: 2, last: { ok: false, ts: now - 3 * 3600000, detail: 'ERROR_CAPTCHA_UNSOLVABLE' } },
+      text: { solved: 57, failed: 2, last: { ok: false, ts: now - 3 * 3600000, detail: 'ERROR_CAPTCHA_UNSOLVABLE' } },
     },
     log: [
       { ts: now - 2 * min, kind: 'awsGrid', ok: true, ms: 2140, host: 'shop.example.com', detail: 'accepted after 1 round(s)' },
       { ts: now - 5 * min, kind: 'blsGrid', ok: true, ms: 860, host: 'visa.example.org', detail: '748: picked 1,4,7 (submitted)' },
       { ts: now - 9 * min, kind: 'blsGrid', ok: true, ms: 910, host: 'visa.example.org', detail: '305: picked 0,5' },
       { ts: now - 47 * min, kind: 'awsToken', ok: true, ms: 6420, host: 'app.example.net', detail: 'aws-waf-token set' },
-      { ts: now - 3 * 3600000, kind: 'blsText', ok: false, ms: 410, host: 'login.example.pl', detail: 'ERROR_CAPTCHA_UNSOLVABLE: low confidence' },
+      { ts: now - 3 * 3600000, kind: 'text', ok: false, ms: 410, host: 'login.example.pl', detail: 'ERROR_CAPTCHA_UNSOLVABLE: low confidence' },
     ],
   });
 }"""

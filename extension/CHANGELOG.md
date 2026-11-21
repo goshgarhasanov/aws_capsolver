@@ -3,6 +3,27 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.4 – 2026-11-21
+
+### Fixed (verified on the live GeeTest demo at 2captcha.com, v3 4/4 and v4 6/6 solved)
+- **GeeTest v3 never solved on real pages.** It answered while the popup still showed
+  "Loading" (empty 300x150 canvases -> `piece does not fit into background`); it now waits until
+  the background canvas is painted and the slice canvas holds the piece (no round is spent).
+- **v3 drag ran away.** The real v3 slice canvas covers the whole picture and the piece is
+  redrawn inside it (the element never moves), so the closed loop saw "no movement" and kept
+  dragging; the piece position is now read from the canvas content.
+- **False "solved".** Real v3 keeps `.geetest_success_radar_tip` & co. in the DOM all the time;
+  success now comes only from the state classes.
+- **v4 landed ~4 px off.** The live v4 widget moves the piece about 4 px when the button is
+  released and verifies that position; the drag now aims short by that jump (re-measured on
+  every drag of the page).
+
+### Changed
+- **One "Text captcha" solver.** BLS Poland text and the general text solver are merged into a
+  single switch, counter and icon (the BLS Poland login still uses its own model,
+  `module: bls_poland`; every other picture uses `common`). Settings v3 migration: on when either
+  old switch was on.
+
 ## 1.0.3 – 2026-11-21
 
 ### Added

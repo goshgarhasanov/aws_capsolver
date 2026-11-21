@@ -15,6 +15,7 @@
   const FAMILIES = ["slide", "icon", "word", "space", "nine", "gobang"];
 
   const state = {
+    releaseJump: { 4: 4 },    // per GeeTest version: how far the piece moves when released (px; v4 measured on live widgets, re-learned per page)
     busy: false,
     attempts: 0,              // rounds answered for the current widget
     gaveUp: false,
@@ -267,6 +268,43 @@
     return captureEl(el);
   }
 
+  // True when a canvas holds a real picture yet (GeeTest creates its canvases empty and with the
+  // default 300x150 size, shows "Loading" and only then draws the challenge into them).
+  function canvasPainted(c, minCoverage, needContrast = true) {
+    if (!c || c.tagName !== "CANVAS" || !c.width || !c.height) return false;
+    try {
+      const step = Math.max(1, Math.floor(Math.min(c.width, c.height) / 24));
+      const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let seen = 0;
+      let opaque = 0;
+      let lo = 255;
+      let hi = 0;
+      for (let y = 0; y < c.height; y += step) {
+        for (let x = 0; x < c.width; x += step) {
+          const i = (y * c.width + x) * 4;
+          seen += 1;
+          if (data[i + 3] > 40) {
+            opaque += 1;
+            const v = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+          }
+        }
+      }
+      return opaque / seen >= minCoverage && (!needContrast || hi - lo > 12); // not a flat colour
+    } catch (_) {
+      return true; // tainted: cannot tell, the screenshot path will read it
+    }
+  }
+
+  // The slide puzzle is drawn: background painted, and a v3 slice canvas holds its piece.
+  function slideReady(ch) {
+    if (ch.family !== "slide" || ch.version !== 3) return true;
+    if (gtVisible("loading", ch.root).length) return false;
+    if (!canvasPainted(ch.bgEl, 0.9)) return false;
+    return !ch.pieceEl || ch.pieceEl.tagName !== "CANVAS" || canvasPainted(ch.pieceEl, 0.005, false);
+  }
+
   // A v3 slice canvas is as big as the picture, with the piece image drawn at (0, ypos).
   // Cut out that piece image (x origin kept at 0: the answer positions the canvas' left edge)
   // and report its top row, which is GeeTest's ypos in canvas pixels.
@@ -403,11 +441,41 @@
   // Drag the slider until the piece element's left edge sits at `targetX` (CSS px).
   // Closed loop: the piece/handle ratio differs between GeeTest versions and layouts, so it
   // is measured on the way and the end of the drag is corrected (a small human overshoot too).
+  // Left edge (CSS px) of the piece. A v3 slice canvas covers the whole picture and GeeTest
+  // redraws the piece inside it while dragging, so the element itself never moves: read the
+  // piece's first opaque column from the canvas instead.
+  function pieceLeftOf(ch) {
+    const el = ch.pieceEl;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (el.tagName === "CANVAS" && el.width && r.width && Math.abs(r.width - ch.bgEl.getBoundingClientRect().width) < 4) {
+      try {
+        const data = el.getContext("2d").getImageData(0, 0, el.width, el.height).data;
+        for (let x = 0; x < el.width; x++) {
+          for (let y = 0; y < el.height; y += 2) {
+            if (data[(y * el.width + x) * 4 + 3] > 40) return r.left + x * (r.width / el.width);
+          }
+        }
+        return null;
+      } catch (_) {
+        return null; // tainted: no measurement, open-loop drag
+      }
+    }
+    return r.left;
+  }
+
   async function dragSlider(ch, targetX) {
     const handle = ch.handle;
     const hr = handle.getBoundingClientRect();
-    const pieceLeft = () => (ch.pieceEl ? ch.pieceEl.getBoundingClientRect().left : null);
+    const pieceLeft = () => pieceLeftOf(ch);
     const p0 = pieceLeft();
+    // GeeTest v4 re-places the piece when the button is released (seen: +4 px on 2captcha's
+    // demo, every time): aim short by the jump measured on earlier drags of this page
+    const jump = state.releaseJump[ch.version] || 0;
+    targetX -= jump;
+    // targetX is for the piece IMAGE's left edge; a v3 slice measures its first opaque column,
+    // which can sit a few pixels right of the image edge: compare like with like
+    if (p0 !== null) targetX += p0 - ch.pieceEl.getBoundingClientRect().left;
     const need = targetX - (p0 === null ? ch.bgEl.getBoundingClientRect().left : p0);
     let ratio = 1;
     if (p0 !== null) {
@@ -415,7 +483,7 @@
       const pr = ch.pieceEl.getBoundingClientRect();
       const br = ch.bgEl.getBoundingClientRect();
       const track = handle.parentElement ? handle.parentElement.getBoundingClientRect() : br;
-      if (pr.width < br.width * 0.6 && track.width > hr.width * 2) {
+      if (ch.version !== 3 && pr.width < br.width * 0.6 && track.width > hr.width * 2) {
         ratio = (br.width - pr.width) / Math.max(1, track.width - hr.width);
       }
     }
@@ -431,7 +499,7 @@
     // phase 1: most of the way, then measure how far the piece really moved
     await glide(drag, startX + (need / ratio) * rand(0.62, 0.72), total * 0.55);
     await CS.sleep(rand(18, 40));
-    if (p0 !== null) {
+    if (p0 !== null && pieceLeft() !== null) {
       const moved = pieceLeft() - p0;
       const dx = drag.x - startX;
       if (Math.abs(dx) > 8 && Math.abs(moved) > 2) ratio = moved / dx;
@@ -444,13 +512,22 @@
     // fine correction from what the page actually shows
     for (let i = 0; i < 4 && p0 !== null; i++) {
       await CS.sleep(rand(25, 50));
-      const err = targetX - pieceLeft();
+      const now = pieceLeft();
+      if (now === null) break;
+      const err = targetX - now;
       if (Math.abs(err) <= 0.6) break;
       await glide(drag, drag.x + err / ratio, rand(70, 140));
     }
     await CS.sleep(rand(80, 220));
+    const before = p0 === null ? null : pieceLeft();
     fire(targetAt(drag.x, drag.y, handle), "up", drag.x, drag.y, 0);
-    return p0 === null ? null : pieceLeft() - targetX;
+    if (before === null) return null;
+    await CS.sleep(120);
+    const end = pieceLeft();
+    if (end === null) return null;
+    const j = end - before;
+    if (Math.abs(j) < 12) state.releaseJump[ch.version] = j; // learn the jump for the next rounds
+    return end - (targetX + jump);
   }
 
   // ------------------------------------------------------------ solving
@@ -468,8 +545,10 @@
           const piece = await readPicture(ch.pieceEl, false);
           if (piece.canvas && ch.pieceEl.tagName === "CANVAS") {
             const cut = cutPiece(piece);
-            task.piece = cut.pic.b64;
-            if (cut.top !== null) y = cut.top * (bg.h / piece.h);
+            if (cut.top !== null) {
+              task.piece = cut.pic.b64;
+              y = cut.top * (bg.h / piece.h);
+            } // an empty slice canvas: send no piece, the model finds the gap alone
           } else {
             task.piece = piece.b64;
           }
@@ -578,8 +657,10 @@
   }
 
   function succeeded(ch) {
-    if (gtVisible("success").length || gtVisible("radar_success").length || gtVisible("success_radar_tip").length ||
-        gtVisible("lock_success").length) return true;
+    // note: real v3 keeps .geetest_success_radar_tip & co. in the DOM (and "visible") all the
+    // time; only the holder's / panel's state classes say the puzzle was passed
+    if (gtVisible("success").length || gtVisible("radar_success").length || gtVisible("lock_success").length ||
+        gtVisible("panel_success").length) return true;
     return !ch.root || !ch.root.isConnected || !CS.isVisible(ch.root);
   }
 
@@ -717,6 +798,11 @@
         await CS.sleep(s.delayMs);
         if (!detect() && btn.isConnected && CS.isVisible(btn)) await CS.humanClick(btn);
       }
+      return;
+    }
+    if (!slideReady(ch)) {
+      // the popup is open but the pictures are still loading: wait, this costs no round
+      badgeFor(ch).set("solving", `${label(ch)}: waiting for the picture`, false);
       return;
     }
     const sig = signature(ch);

@@ -30,7 +30,7 @@
     "message": "BLS Polşa mətn"
   },
   "kind_text": {
-    "message": "Ümumi mətn"
+    "message": "Mətn captcha"
   },
   "kind_geetest": {
     "message": "GeeTest"
@@ -48,7 +48,7 @@
     "message": "BLS Polşa girişindəki 5 rəqəm"
   },
   "desc_text": {
-    "message": "İstənilən saytda şəkilli mətn captcha (avtomatik tapılır)"
+    "message": "BLS Polşa daxil hər şəkilli mətn captcha (avtomatik tapılır)"
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: sürüşdürmə, ikon/söz kliki, doqquzlu şəbəkə, gobang"

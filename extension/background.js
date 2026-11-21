@@ -17,13 +17,13 @@ const TASK_TYPES = {
   awsGrid: "AwsWafClassification",
   awsToken: "AntiAwsWafTaskProxyLess",
   blsGrid: "BlsClassification",
-  blsText: "ImageToTextTask",
   text: "ImageToTextTask",
   geetest: "GeeTestClassification",
 };
 const GEETEST_QUESTION = /^geetest:(slide|icon|word|space|gobang|nine(:[^\x00-\x1f]{1,64})?)$/;
 // ImageToTextTask module per text solver
-const TEXT_MODULES = { blsText: "bls_poland", text: "common" };
+// ImageToTextTask modules the text solver may ask for (BLS Poland login -> its own model)
+const TEXT_MODULES = new Set(["common", "bls_poland"]);
 
 class SolveError extends Error {
   constructor(code, message) {
@@ -127,11 +127,12 @@ function buildTask(kind, raw) {
     case "blsGrid":
       if (!/^\d{3}$/.test(String(t.target || "")) || !b64list(t.images, 9, 9)) break;
       return { type: TASK_TYPES.blsGrid, question: `bls:grid:${t.target}`, images: t.images };
-    case "blsText":
-    case "text":
+    case "text": {
       if (!str(t.body, 4 * 1024 * 1024)) break;
+      const module = TEXT_MODULES.has(t.module) ? t.module : "common";
       // case: true = case-sensitive (the answer keeps upper/lower case exactly as read)
-      return { type: TASK_TYPES[kind], body: t.body, module: TEXT_MODULES[kind], case: true };
+      return { type: TASK_TYPES.text, body: t.body, module, case: true };
+    }
     case "geetest": {
       if (!str(t.question, 80) || !GEETEST_QUESTION.test(t.question) || !b64list(t.images, 1, 1)) break;
       const out = { type: TASK_TYPES.geetest, question: t.question, images: t.images };

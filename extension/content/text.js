@@ -1,6 +1,7 @@
 // Image-to-text captchas, two solvers sharing one engine:
-//  - blsText: BLS Poland login (5 digits on red curves, input "captcha_code"), module bls_poland
-//  - text:    any image captcha next to a text input, module common
+// One "Text captcha" solver (kind "text", one switch) with two finders:
+//  - BLS Poland login (5 digits on red curves, input "captcha_code") -> module bls_poland
+//  - any image captcha next to a text input                         -> module common
 //
 // Detection (generic solver): a captcha is a pair (picture, text input).
 //  * pictures: <img>, <canvas>, <input type=image> and elements with a CSS background image,
@@ -152,8 +153,10 @@
     return best;
   }
 
+  // finder name -> [finder, ImageToTextTask module]
   const SOLVERS = {
-    blsText: {
+    blsPoland: {
+      module: "bls_poland",
       find() {
         const input = [...document.querySelectorAll('input[name="captcha_code"], input#captcha_code')]
           .find(CS.isVisible);
@@ -165,7 +168,7 @@
         return { input, img: imgs[0] };
       },
     },
-    text: { find: findGenericPair },
+    general: { module: "common", find: findGenericPair },
   };
 
   // ---- reading the picture
@@ -240,7 +243,8 @@
     };
   }
 
-  function makeSolver(KIND, finder) {
+  function makeSolver(finder) {
+    const KIND = "text";
     const state = { done: new Set(), current: null, badge: null, busy: false, filled: "", tries: new Map() };
 
     async function scan() {
@@ -296,7 +300,7 @@
           CS.outcome(KIND, false, detail, Date.now() - started);
           return;
         }
-        const res = await CS.solve(KIND, { body });
+        const res = await CS.solve(KIND, { body, module: finder.module });
         if (!res.ok) {
           state.badge.set("error", `${res.code}: ${res.message}`, true);
           setTimeout(scan, 1000); // retry while tries are left
@@ -368,5 +372,5 @@
     return p ? { input: p.input.id || p.input.name || "", img: p.img.id || p.img.tagName } : null;
   };
 
-  for (const [kind, finder] of Object.entries(SOLVERS)) makeSolver(kind, finder);
+  for (const finder of Object.values(SOLVERS)) makeSolver(finder);
 })();

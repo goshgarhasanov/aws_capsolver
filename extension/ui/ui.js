@@ -97,10 +97,7 @@ const KIND_ICONS = {
   blsGrid: '<rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5" class="pick"/>' +
     '<rect x="2" y="11" width="7" height="7" rx="1.5" class="pick"/><rect x="11" y="11" width="7" height="7" rx="1.5"/>' +
     '<text x="14.5" y="7.6" class="glyph">7</text><text x="5.5" y="16.6" class="glyph">7</text>',
-  // BLS Poland: digits on a wavy line
-  blsText: '<path d="M1.5 14c3-4 5 3 8.5-1s5.5 2 8.5-1" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".55"/>' +
-    '<text x="10" y="11.5" class="glyph wide">123</text>',
-  // general text captcha: "Aa" on a picture frame
+  // text captcha (BLS Poland included): "Aa" on a picture frame
   text: '<rect x="1.5" y="3.5" width="17" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
     '<text x="10" y="13.6" class="glyph wide">Aa</text>',
   // GeeTest: a picture with a puzzle-piece gap above a slider knob
