@@ -1,0 +1,521 @@
+{
+"03279a0d226541f2992abf576fac90e9": {
+"split": "test",
+"boxes": [
+[
+162,
+22,
+192,
+52
+],
+[
+216,
+130,
+246,
+160
+],
+[
+224,
+44,
+254,
+74
+]
+],
+"note": "hand verified"
+},
+"05ab9700ff3e45d4a68f53b140621a96": {
+"split": "test",
+"boxes": [
+[
+182,
+102,
+212,
+132
+],
+[
+162,
+30,
+192,
+60
+],
+[
+98,
+102,
+128,
+132
+]
+],
+"note": "hand verified"
+},
+"0600705003e641e4a76067f3f2c03975": {
+"split": "test",
+"boxes": [
+[
+108,
+122,
+138,
+152
+],
+[
+132,
+10,
+162,
+40
+],
+[
+44,
+90,
+74,
+120
+]
+],
+"note": "hand verified"
+},
+"06944f41c403496e80e70d3497410248": {
+"split": "test",
+"boxes": [
+[
+50,
+18,
+80,
+48
+],
+[
+152,
+80,
+182,
+110
+],
+[
+26,
+136,
+56,
+166
+]
+],
+"note": "hand verified"
+},
+"083935dac0754e65884466c739e83d7f": {
+"split": "test",
+"boxes": [
+[
+46,
+82,
+76,
+112
+],
+[
+164,
+112,
+194,
+142
+],
+[
+230,
+80,
+260,
+110
+]
+],
+"note": "hand verified"
+},
+"08485f77202747fea4f531697256f39d": {
+"split": "test",
+"boxes": [
+[
+122,
+68,
+152,
+98
+],
+[
+30,
+16,
+60,
+46
+],
+[
+50,
+96,
+80,
+126
+]
+],
+"note": "hand verified"
+},
+"0914466e0f3a49a09dc735afd50e1eac": {
+"split": "test",
+"boxes": [
+[
+188,
+62,
+218,
+92
+],
+[
+122,
+60,
+152,
+90
+],
+[
+62,
+78,
+92,
+108
+]
+],
+"note": "hand verified"
+},
+"092a99294ef742aca51d197af99a833b": {
+"split": "test",
+"boxes": [
+[
+198,
+74,
+228,
+104
+],
+[
+48,
+122,
+78,
+152
+],
+[
+34,
+50,
+64,
+80
+]
+],
+"note": "hand verified"
+},
+"09faaa10498e46b687423a7afa6e275a": {
+"split": "test",
+"boxes": [
+[
+56,
+42,
+86,
+72
+],
+[
+112,
+124,
+142,
+154
+],
+[
+225,
+85,
+255,
+115
+]
+],
+"note": "hand verified (corrected)"
+},
+"0ab70a99bca94e18b47db195bbd1328f": {
+"split": "test",
+"boxes": [
+[
+35,
+75,
+65,
+105
+],
+[
+214,
+56,
+244,
+86
+],
+[
+100,
+22,
+130,
+52
+]
+],
+"note": "hand verified (corrected)"
+},
+"0b3fb85c7649470f905078e89928d321": {
+"split": "test",
+"boxes": [
+[
+214,
+100,
+244,
+130
+],
+[
+54,
+134,
+84,
+164
+],
+[
+144,
+92,
+174,
+122
+]
+],
+"note": "hand verified"
+},
+"0cf45b85444d4bfbb650402412caae7d": {
+"split": "test",
+"boxes": [
+[
+182,
+40,
+212,
+70
+],
+[
+120,
+124,
+150,
+154
+],
+[
+40,
+30,
+70,
+60
+]
+],
+"note": "hand verified"
+},
+"0d7910d41cbc4aab8db115196bf1d802": {
+"split": "test",
+"boxes": [
+[
+150,
+108,
+180,
+138
+],
+[
+35,
+110,
+65,
+140
+],
+[
+120,
+26,
+150,
+56
+]
+],
+"note": "hand verified (corrected)"
+},
+"0defba89f28149a3a7af10ee44fe53fe": {
+"split": "test",
+"boxes": [
+[
+128,
+84,
+158,
+114
+],
+[
+30,
+44,
+60,
+74
+],
+[
+194,
+30,
+224,
+60
+]
+],
+"note": "hand verified"
+},
+"0ecbf1844fa44b6389e40262a623577e": {
+"split": "test",
+"boxes": null,
+"note": "model wrong at labelling time; true icon too faint to place by eye"
+},
+"0edaa45eea174d1d9924c667845091e4": {
+"split": "test",
+"boxes": null,
+"note": "model wrong at labelling time; true icon too faint to place by eye"
+},
+"0f931855c80a4c2aa190f6096ffdc414": {
+"split": "test",
+"boxes": [
+[
+72,
+110,
+102,
+140
+],
+[
+206,
+26,
+236,
+56
+],
+[
+132,
+60,
+162,
+90
+]
+],
+"note": "hand verified"
+},
+"1010b90558ab4cc6be9798d7051554ce": {
+"split": "test",
+"boxes": [
+[
+89,
+96,
+119,
+126
+],
+[
+136,
+26,
+166,
+56
+],
+[
+208,
+102,
+238,
+132
+]
+],
+"note": "hand verified"
+},
+"10b6fa4209ce4036932d6f8e0c166e50": {
+"split": "test",
+"boxes": null,
+"note": "model wrong at labelling time; true icon too faint to place by eye"
+},
+"112f66aca3374c7da4570aca9977aea2": {
+"split": "test",
+"boxes": [
+[
+50,
+114,
+80,
+144
+],
+[
+136,
+88,
+166,
+118
+],
+[
+148,
+24,
+178,
+54
+]
+],
+"note": "hand verified"
+},
+"129aa4ad1a264236bc0c2ce6f2e48570": {
+"split": "test",
+"boxes": [
+[
+16,
+98,
+46,
+128
+],
+[
+244,
+54,
+274,
+84
+],
+[
+88,
+122,
+118,
+152
+]
+],
+"note": "hand verified"
+},
+"131ff3614edc421a9957d73e7c1173fd": {
+"split": "test",
+"boxes": [
+[
+52,
+92,
+82,
+122
+],
+[
+158,
+34,
+188,
+64
+],
+[
+20,
+34,
+50,
+64
+]
+],
+"note": "hand verified"
+},
+"1338f4de2a454ec2a2778b461a1c7372": {
+"split": "test",
+"boxes": [
+[
+190,
+120,
+220,
+150
+],
+[
+52,
+104,
+82,
+134
+],
+[
+108,
+20,
+138,
+50
+]
+],
+"note": "hand verified"
+},
+"1485b3bcce8540118b2f5d5fe8caa13b": {
+"split": "test",
+"boxes": [
+[
+205,
+125,
+235,
+155
+],
+[
+264,
+130,
+294,
+160
+],
+[
+38,
+20,
+68,
+50
+]
+],
+"note": "hand verified (corrected)"
+}
+}

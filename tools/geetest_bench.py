@@ -187,6 +187,9 @@ def bench_icon(split: str = "test") -> list[dict]:
         if h in seen:
             continue
         seen.add(h)
+        if lab["boxes"] is None:  # hand verdict "wrong", true icon not placeable by eye
+            oks.append(False)
+            continue
         hints = [(d / f"hint_{i}.png").read_bytes() for i in range(len(lab["boxes"]))]
         try:
             pts, dt = _timed(G.click_points, (d / "image.jpg").read_bytes(), "icon", hints)

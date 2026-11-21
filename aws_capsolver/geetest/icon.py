@@ -34,6 +34,7 @@ WORK_WIDTH = 150          # working width of the clean picture
 CROP = 40
 MAX_CANDIDATES = 8
 NMS_RADIUS = 7
+ARROW_MIN = 0.5          # rotation-match correlation of v3 arrow hints
 
 _lock = threading.Lock()
 _models = None
@@ -121,9 +122,9 @@ def split_v3_strip(im):
     strip = np.asarray(im.crop((0, pic_h, w, h)).convert("L"), dtype=np.float32)
     if strip.size == 0:
         return pic, []
-    bgv = float(np.median(strip))
-    ink = np.abs(strip - bgv) > 60
-    cols = ink.any(axis=0)
+    # hint icons are dark strokes on a light panel; a solid dark filler can follow the panel
+    ink = strip < 140
+    cols = ink.any(axis=0) & (ink.mean(axis=0) < 0.9)
     hints = []
     x = 0
     # the strip starts with a text label ("请依次点击" etc.) in some themes: keep only blobs
@@ -134,7 +135,7 @@ def split_v3_strip(im):
             continue
         x1 = x
         gap = 0
-        while x1 < len(cols) and gap < 4:
+        while x1 < len(cols) and gap < 2:
             gap = gap + 1 if not cols[x1] else 0
             x1 += 1
         x1 -= gap
@@ -146,6 +147,42 @@ def split_v3_strip(im):
             hints.append(g.convert("RGB"))
         x = x1 + 1
     return pic, hints
+
+
+def _radial_canvas(im, size: int = 48) -> np.ndarray:
+    """Strokes centred on their centroid and scaled by their max radius (rotation safe)."""
+    from PIL import Image
+
+    m = hint_mask(im, 64)
+    ys, xs = np.nonzero(m > 0.3)
+    if len(xs) < 4:
+        return np.zeros((size, size), np.float32)
+    cy, cx = float(ys.mean()), float(xs.mean())
+    r = float(np.sqrt((ys - cy) ** 2 + (xs - cx) ** 2).max()) + 1.0
+    f = (size / 2 - 2) / r
+    big = Image.fromarray((m * 255).astype(np.uint8))
+    big = big.transform((size, size), Image.AFFINE, (1 / f, 0, cx - size / 2 / f, 0, 1 / f, cy - size / 2 / f),
+                        resample=Image.BILINEAR)
+    return np.asarray(big, np.float32) / 255.0
+
+
+def _are_arrows(hints) -> bool:
+    """True when all hints are one shape in different rotations (v3 arrow hints)."""
+    from PIL import Image
+
+    if len(hints) < 2:
+        return False
+    cans = [_radial_canvas(h) for h in hints]
+    c0 = Image.fromarray((cans[0] * 255).astype(np.uint8))
+    rots = []
+    for k in range(8):
+        r = np.asarray(c0.rotate(45 * k, resample=Image.BILINEAR), np.float32) / 255.0
+        rots.append((r - r.mean()) / (r.std() + 1e-6))
+    for c in cans[1:]:
+        z = (c - c.mean()) / (c.std() + 1e-6)
+        if max(float((z * r).mean()) for r in rots) < ARROW_MIN:
+            return False
+    return True
 
 
 # ------------------------------------------------------------------------ models
@@ -234,6 +271,9 @@ def click_icons(image, hints) -> list[tuple[int, int]]:
         pic, hint_ims = split_v3_strip(im)
         if not hint_ims:
             raise InvalidGeeTestInput("no hint icons given and none found below the picture")
+        if _are_arrows(hint_ims):
+            # v3 "direction" variant: click the icons that FACE the arrow directions
+            raise UnsupportedGeeTest("GeeTest v3 direction click (arrow hints) is not supported")
     if len(hint_ims) > 6:
         raise InvalidGeeTestInput("too many hint icons")
     clean, sx, sy, ox, oy = clean_picture(pic)

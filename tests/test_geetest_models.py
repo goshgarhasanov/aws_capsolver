@@ -185,3 +185,73 @@ def test_gobang_canvas_board():
 
 def test_warmup_runs():
     assert G.warmup(background=False) is None
+
+
+# ------------------------------------------------------------------- nine / click
+def _clip_available() -> bool:
+    try:
+        from aws_capsolver.vision.grid import get_engine
+        get_engine()
+        return True
+    except Exception:  # noqa: BLE001 - no torch / open_clip / cached weights
+        return False
+
+
+def test_nine_icon_table_names_prompt_icons():
+    from aws_capsolver.geetest import nine
+    if not nine.ICONS_PATH.is_file():
+        pytest.skip("icon table not installed")
+    label, sim = nine.name_icon(Image.open(FIX / "v4_nine_hint.png"))
+    assert label == "key" and sim > 0.95
+    # a re-encoded, rescaled, flattened copy (what a browser canvas gives) is still recognised
+    flat = Image.new("RGB", (90, 90), (255, 255, 255))
+    ic = Image.open(FIX / "v4_nine_hint.png").convert("RGBA").resize((90, 90))
+    flat.paste(ic, (0, 0), ic)
+    assert nine.name_icon(flat)[0] == "key"
+    assert nine._normalize_label("Please click on all the Keys.") == "keys"
+    with pytest.raises(InvalidGeeTestInput):
+        nine._normalize_label("   ")
+
+
+def test_nine_grid_real_sample():
+    if not _clip_available():
+        pytest.skip("CLIP backbones not available")
+    t = json.loads(_read("v4_nine.json"))
+    img = _read("v4_nine_image.jpg")
+    assert G.nine_grid(img, _read("v4_nine_hint.png")) == t["cells"]
+    assert G.nine_grid(img, base64.b64encode(_read("v4_nine_hint.png")).decode()) == t["cells"]
+    assert G.nine_grid(img, "key") == t["cells"]
+    assert len(G.nine_grid(img, "key", count=2)) == 2
+
+
+def test_click_unsupported_kinds_and_v3_arrows():
+    img = _png(Image.new("RGB", (300, 200), (90, 100, 110)))
+    with pytest.raises(UnsupportedGeeTest):
+        G.click_points(img, "word", ["a", "b"])
+    with pytest.raises(UnsupportedGeeTest):
+        G.click_points(img, "space")
+    # a v3 click picture whose hint strip shows arrows (the "direction" variant)
+    pic = Image.new("RGB", (344, 384), (60, 110, 160))
+    d = ImageDraw.Draw(pic)
+    d.rectangle([0, 344, 150, 384], fill=(255, 255, 255))
+    for i, ang in enumerate((0, 90, 225)):
+        arrow = Image.new("L", (30, 30), 255)
+        ImageDraw.Draw(arrow).polygon([(15, 3), (25, 15), (18, 15), (18, 27), (12, 27), (12, 15), (5, 15)], fill=0)
+        arrow = arrow.rotate(ang, fillcolor=255)
+        pic.paste(arrow.convert("RGB"), (8 + i * 40, 349))
+    with pytest.raises(UnsupportedGeeTest):
+        G.click_points(_png(pic), "icon")
+
+
+def test_icon_click_real_sample():
+    from aws_capsolver.geetest import icon
+    if not icon.WEIGHTS.is_file():
+        pytest.skip("icon weights not installed")
+    t = json.loads(_read("v4_icon.json"))
+    hints = [_read(f"v4_icon_hint_{i}.png") for i in range(3)]
+    pts = G.click_points(_read("v4_icon_image.jpg"), "icon", hints)
+    assert len(pts) == 3
+    for (x, y), b in zip(pts, t["boxes"]):
+        assert b[0] <= x <= b[2] and b[1] <= y <= b[3]
+    with pytest.raises(InvalidGeeTestInput):
+        G.click_points(_read("v4_icon_image.jpg"), "icon", ["x"])
