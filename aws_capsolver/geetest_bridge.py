@@ -3,7 +3,7 @@ Lazy access to the GeeTest models (package aws_capsolver.geetest, built separate
 
 The package exposes four solvers and three typed errors:
 
-* ``slide_offset(background, piece=None, full_background=None) -> int``
+* ``slide_offset(background, piece=None, full_background=None, y=None) -> int``
 * ``click_points(image, kind, hints=None) -> [(x, y), ...]`` (kind icon | word | space)
 * ``nine_grid(image, target, count=None) -> [index, ...]`` (0-based, row-major)
 * ``gobang(board) -> ((row, col), (row, col))``
@@ -144,9 +144,20 @@ def _pair(value: Any, what: str) -> Tuple[int, int]:
 # ---------------------------------------------------------------------- solvers
 
 def slide_offset(background: bytes, piece: Optional[bytes] = None,
-                 full_background: Optional[bytes] = None) -> int:
-    """x (background pixels) where the piece image's left edge must end (the drag distance);
-    without a piece, the left edge of the gap."""
+                 full_background: Optional[bytes] = None, y: Optional[int] = None) -> int:
+    """
+    x (background pixels) where the piece image's left edge must end (the drag distance);
+    without a piece, the left edge of the gap. `y` = top of the piece image in background
+    pixels (rules out decoy gaps); a model build without the parameter is called without it.
+    """
+    if y is not None:
+        try:
+            return _int(_call("slide_offset", background, piece=piece, full_background=full_background,
+                              y=y), "x")
+        except TypeError as exc:
+            if "'y'" not in str(exc):
+                raise
+            logger.info("geetest slide_offset() has no y parameter; solving without it")
     return _int(_call("slide_offset", background, piece=piece, full_background=full_background), "x")
 
 

@@ -292,7 +292,7 @@ curl -s localhost:8790/createTask -H 'content-type: application/json' -d '{"clie
 
 | `question` | other fields | `solution` |
 |---|---|---|
-| `geetest:slide` | `piece` (optional, the piece picture with alpha), `fullBackground` (optional, v3 picture without the gap) | `{"x": 168}`: with a piece, where the piece **image's** left edge must end (= the drag distance, in background-picture pixels); without one, the left edge of the gap. Scale by displayed width / picture width |
+| `geetest:slide` | `piece` (optional, the piece picture with alpha), `fullBackground` (optional, v3 picture without the gap), `y` (optional integer: top of the piece image in background pixels - GeeTest's `ypos`; rules out v4 decoy gaps) | `{"x": 168}`: with a piece, where the piece **image's** left edge must end (= the drag distance, in background-picture pixels); without one, the left edge of the gap. Scale by displayed width / picture width |
 | `geetest:icon` | `hints` (optional): the small icons to click, in order, as base64 pictures (a v3 344x384 picture may omit them: they are cut from its bottom strip) | `{"points": [[x, y], ...]}` in picture pixels, in click order |
 | `geetest:word` | `hints` (optional): the characters to click, in order (`["天", "地"]`) | `{"points": [[x, y], ...]}` |
 | `geetest:space` | `hints` (optional): the question text, one string | `{"points": [[x, y], ...]}` |

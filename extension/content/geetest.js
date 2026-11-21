@@ -267,26 +267,32 @@
     return captureEl(el);
   }
 
-  // A v3 slice canvas is as wide as the picture with the piece drawn at its left; cut the
-  // transparent columns on the right so the model gets the piece image as GeeTest serves it
-  // (left edge = the canvas' left edge, which is what the answer positions).
-  function trimRight(pic) {
+  // A v3 slice canvas is as big as the picture, with the piece image drawn at (0, ypos).
+  // Cut out that piece image (x origin kept at 0: the answer positions the canvas' left edge)
+  // and report its top row, which is GeeTest's ypos in canvas pixels.
+  function cutPiece(pic) {
     try {
       const data = pic.canvas.getContext("2d").getImageData(0, 0, pic.w, pic.h).data;
       let right = -1;
-      for (let x = pic.w - 1; x >= 0 && right < 0; x--) {
-        for (let y = 0; y < pic.h; y++) {
-          if (data[(y * pic.w + x) * 4 + 3] > 40) { right = x; break; }
+      let top = -1;
+      let bottom = -1;
+      for (let y = 0; y < pic.h; y++) {
+        for (let x = 0; x < pic.w; x++) {
+          if (data[(y * pic.w + x) * 4 + 3] > 40) {
+            if (top < 0) top = y;
+            bottom = y;
+            if (x > right) right = x;
+          }
         }
       }
-      if (right < 0 || right >= pic.w - 1) return pic;
+      if (right < 0) return { pic, top: null };
       const c = document.createElement("canvas");
       c.width = right + 1;
-      c.height = pic.h;
-      c.getContext("2d").drawImage(pic.canvas, 0, 0);
-      return fromCanvas(c);
+      c.height = bottom - top + 1;
+      c.getContext("2d").drawImage(pic.canvas, 0, -top);
+      return { pic: fromCanvas(c), top };
     } catch (_) {
-      return pic;
+      return { pic, top: null };
     }
   }
 
@@ -456,14 +462,28 @@
       const bg = await readPicture(ch.bgEl, true);
       task.images = [bg.b64];
       extra.bg = bg;
+      let y = null;   // top of the piece image in background pixels (GeeTest's ypos)
       if (ch.pieceEl) {
         try {
           const piece = await readPicture(ch.pieceEl, false);
-          task.piece = (piece.canvas && ch.pieceEl.tagName === "CANVAS" ? trimRight(piece) : piece).b64;
+          if (piece.canvas && ch.pieceEl.tagName === "CANVAS") {
+            const cut = cutPiece(piece);
+            task.piece = cut.pic.b64;
+            if (cut.top !== null) y = cut.top * (bg.h / piece.h);
+          } else {
+            task.piece = piece.b64;
+          }
         } catch (_) {
           // the model can find the gap without the piece
         }
+        if (y === null) {
+          // v4: the widget places the piece element at ypos (scaled to the displayed picture)
+          const pr = ch.pieceEl.getBoundingClientRect();
+          const br = ch.bgEl.getBoundingClientRect();
+          if (br.height > 0) y = (pr.top - br.top) * (bg.h / br.height);
+        }
       }
+      if (y !== null && Number.isFinite(y) && y >= 0 && y < bg.h) task.y = Math.round(y);
       if (ch.fullEl) {
         try { task.fullBackground = (await readPicture(ch.fullEl, false)).b64; } catch (_) { /* optional */ }
       }

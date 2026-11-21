@@ -306,6 +306,7 @@ class GeeTestJob:
     hints: Tuple[Any, ...] = ()
     target: Any = None           # nine: str (a word) or bytes (a picture)
     count: Optional[int] = None  # nine: how many cells to pick, when the widget says so
+    y: Optional[int] = None      # slide: top of the piece image in background pixels
 
 
 def _geetest_question(task: Dict[str, Any]) -> Tuple[str, Optional[str]]:
@@ -381,13 +382,18 @@ def parse_geetest(task: Dict[str, Any]) -> GeeTestJob:
     if family == "nine" and not target:
         raise SolverError(ERROR_INVALID_TASK_DATA,
                           "geetest:nine needs a target (geetest:nine:<word> or targetImage)")
+    y = None
+    if task.get("y") is not None:
+        if family != "slide":
+            raise SolverError(ERROR_INVALID_TASK_DATA, "y is only for geetest:slide")
+        y = _opt_int(task, "y", 0, GEETEST_MAX_SIDE)
     count = None
     if task.get("count") is not None:
         if family != "nine":
             raise SolverError(ERROR_INVALID_TASK_DATA, "count is only for geetest:nine")
         count = _opt_int(task, "count", 1, NINE_CELLS)
     return GeeTestJob(module=family, image=image, piece=piece, full_background=full,
-                      hints=hints, target=target, count=count)
+                      hints=hints, target=target, count=count, y=y)
 
 
 def _image_size(data: bytes, name: str) -> Tuple[int, int]:
@@ -412,7 +418,9 @@ def run_geetest(job: GeeTestJob) -> Dict[str, Any]:
             _image_size(data, name)
     try:
         if job.module == "slide":
-            x = geetest_bridge.slide_offset(job.image, job.piece, job.full_background)
+            if job.y is not None and job.y >= height:
+                raise SolverError(ERROR_INVALID_TASK_DATA, f"y={job.y} is below the {height} px background")
+            x = geetest_bridge.slide_offset(job.image, job.piece, job.full_background, job.y)
             if not 0 <= x <= width:
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"model returned x={x} outside the image")
             return {"x": x}

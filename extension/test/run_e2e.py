@@ -507,8 +507,8 @@ def geetest_scenarios(context, ext):
           last.get("moves", 0) >= 15 and last.get("ms", 0) >= 300 and last.get("yRange", 0) > 0 and last.get("backtrack"),
           json.dumps(last))
     m = mocks[0] if mocks else {}
-    check("geetest v3 slide: task shape (bg + piece cut from the slice canvas + full background)",
-          m.get("question") == "geetest:slide" and m.get("size") == [260, 160] and (m.get("piece") or [0])[0] in (54, 55) and (m.get("piece") or [0, 0])[1] == 160
+    check("geetest v3 slide: task shape (bg + piece cut from the slice canvas at y=50 + full background)",
+          m.get("question") == "geetest:slide" and m.get("size") == [260, 160] and (m.get("piece") or [0])[0] in (54, 55) and (m.get("piece") or [0, 0])[1] in (50, 51) and m.get("y") == 50
           and m.get("fullBackground") is True, json.dumps(mocks))
     check("geetest v3 slide: pill shows success", badge and badge[0].endswith("ok"), repr(badge))
 
@@ -525,11 +525,11 @@ def geetest_scenarios(context, ext):
     # v4 slide: CSS background pictures, hashed classes, pointer events, piece/handle ratio != 1
     ok, logs, mocks, imgs, _ = run_page("v4", "slide")
     last = logs[-1] if logs else {}
-    check("geetest v4 slide: piece over the gap at x=172 (+-3 px), first round", ok and len(logs) == 1 and
+    check("geetest v4 slide: y rules out the decoy gap; piece over the gap at x=172 (+-3 px), first round", ok and len(logs) == 1 and
           abs(last.get("final", 0) - 172) <= 3, json.dumps(logs))
     m = mocks[0] if mocks else {}
-    check("geetest v4 slide: task shape (bg 320x160 + piece 64x64)",
-          m.get("size") == [320, 160] and m.get("piece") == [64, 64], json.dumps(m))
+    check("geetest v4 slide: task shape (bg 320x160 + piece 64x64 + y=57 from the piece position)",
+          m.get("size") == [320, 160] and m.get("piece") == [64, 64] and m.get("y") == 57, json.dumps(m))
     check("geetest v4 slide: pictures not downloaded again", imgs.count("v4bg") == 1 and imgs.count("v4piece") == 1,
           repr(imgs))
 

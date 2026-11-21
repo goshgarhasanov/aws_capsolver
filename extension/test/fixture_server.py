@@ -82,7 +82,9 @@ def geetest_image(name):
 
     if name == "v4bg":
         img, d = scene(320, 160)
-        d.rectangle([172, 57, 172 + 55, 57 + 55], fill=(20, 20, 20))       # the gap
+        # the piece image (64x64, 4 px transparent margin) sits at ypos 57 -> its square at 61
+        d.rectangle([172, 61, 172 + 55, 61 + 55], fill=(20, 20, 20))       # the gap
+        d.rectangle([60, 4, 60 + 55, 4 + 55], fill=(22, 22, 22))           # a decoy gap (v4 draws some)
     elif name == "v4piece":
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         ImageDraw.Draw(img).rectangle([4, 4, 59, 59], fill=(240, 240, 240, 255))
@@ -119,11 +121,15 @@ def geetest_mock_answer(task):
         "fullBackground": bool(task.get("fullBackground")),
         "hints": [h if len(h) < 16 else png_size(h) for h in task.get("hints") or []],
         "targetImage": png_size(task.get("targetImage")) if task.get("targetImage") else None,
+        "y": task.get("y"),
     })
     key = "click" if family in ("icon", "word", "space") else family
     if key not in GEETEST_ANSWERS:
         return {"errorId": 1, "errorCode": "ERROR_TASK_NOT_SUPPORTED", "errorDescription": "mock: unknown family"}
-    return {"errorId": 0, "status": "ready", "taskId": "mock-gt", "solution": GEETEST_ANSWERS[key]}
+    solution = GEETEST_ANSWERS[key]
+    if key == "slide" and not (isinstance(task.get("y"), int) and any(abs(task["y"] - row) <= 1 for row in (50, 57))):
+        solution = {"x": 56}  # without the right row the decoy gap wins (like the real v4 model)
+    return {"errorId": 0, "status": "ready", "taskId": "mock-gt", "solution": solution}
 
 
 def load_bls_grids():

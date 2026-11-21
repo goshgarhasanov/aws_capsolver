@@ -17,6 +17,8 @@ All notable changes to the Captchosa browser extension. Versions follow
     the memory cache, CORS for GeeTest's CDN) and falls back to a tab screenshot only when needed.
   - Slider: closed-loop, minimum-jerk drag with vertical wobble, overshoot and settle-back,
     pointer + mouse events. Clicks: paced, in the returned order, then Confirm / Submit.
+  - Slide tasks carry `y` (the piece image's top = GeeTest's `ypos`, from the v3 slice canvas or
+    the v4 piece position), which lets the model rule out v4 decoy gaps.
   - A fresh puzzle after the answer is a wrong round (up to *Retries*); success or the widget
     closing counts as solved. The pill, the toolbar badge and the activity log show each step.
 

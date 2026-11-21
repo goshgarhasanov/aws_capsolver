@@ -53,8 +53,8 @@ class InvalidGeeTestInput(GeeTestError):
 def fake_module(**overrides):
     calls = []
 
-    def slide_offset(background, piece=None, full_background=None):
-        calls.append(("slide", len(background), piece is not None, full_background is not None))
+    def slide_offset(background, piece=None, full_background=None, y=None):
+        calls.append(("slide", len(background), piece is not None, full_background is not None, y))
         return 172
 
     def click_points(image, kind, hints=None):
@@ -132,6 +132,11 @@ def test_parse_families():
     {"question": "geetest:nine:car", "count": 0},
     {"question": "geetest:nine:car", "count": "3"},
     {"question": "geetest:slide", "count": 3},
+    {"question": "geetest:slide", "y": -1},
+    {"question": "geetest:slide", "y": True},
+    {"question": "geetest:slide", "y": 5.5},
+    {"question": "geetest:slide", "y": 5000},
+    {"question": "geetest:icon", "y": 10},
 ])
 def test_parse_rejects_bad_payloads(fields):
     task = _task("geetest:slide")
@@ -151,7 +156,9 @@ def test_unknown_family_is_not_supported():
 
 def test_run_each_family(model):
     assert run_geetest(parse_geetest(_task("geetest:slide", piece=PIECE))) == {"x": 172}
-    assert model.calls[-1] == ("slide", len(base64.b64decode(BG)), True, False)
+    assert model.calls[-1] == ("slide", len(base64.b64decode(BG)), True, False, None)
+    assert run_geetest(parse_geetest(_task("geetest:slide", piece=PIECE, y=57))) == {"x": 172}
+    assert model.calls[-1][-1] == 57
     assert run_geetest(parse_geetest(_task("geetest:word", hints=["天"]))) == {
         "points": [[60, 70], [200, 100], [140, 150]]}
     assert model.calls[-1] == ("click", "word", ["天"])
@@ -218,6 +225,32 @@ def test_bad_model_output_is_unsolvable(monkeypatch, question, override):
     with pytest.raises(SolverError) as err:
         run_geetest(parse_geetest(_task(question)))
     assert err.value.code == "ERROR_CAPTCHA_UNSOLVABLE"
+
+
+def test_y_below_the_background_is_invalid(model):
+    with pytest.raises(SolverError) as err:
+        run_geetest(parse_geetest(_task("geetest:slide", y=160)))   # BG is 160 px high
+    assert err.value.code == "ERROR_INVALID_TASK_DATA"
+    assert model.calls == []
+
+
+def test_model_without_y_parameter_still_solves(monkeypatch):
+    seen = []
+
+    def old_slide(background, piece=None, full_background=None):  # a build before y existed
+        seen.append(piece is not None)
+        return 99
+    monkeypatch.setattr(geetest_bridge, "_module", fake_module(slide_offset=old_slide))
+    assert run_geetest(parse_geetest(_task("geetest:slide", piece=PIECE, y=40))) == {"x": 99}
+    assert seen == [True]
+
+
+def test_type_error_inside_the_model_is_not_retried(monkeypatch):
+    def broken(background, piece=None, full_background=None, y=None):
+        raise TypeError("unsupported operand type(s)")
+    monkeypatch.setattr(geetest_bridge, "_module", fake_module(slide_offset=broken))
+    with pytest.raises(TypeError):
+        geetest_bridge.slide_offset(b"x", None, None, 3)
 
 
 def test_undecodable_image_is_invalid_before_the_model(model):

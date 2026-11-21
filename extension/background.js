@@ -138,6 +138,7 @@ function buildTask(kind, raw) {
       for (const k of ["piece", "fullBackground", "targetImage"]) {
         if (str(t[k], 4 * 1024 * 1024)) out[k] = t[k];
       }
+      if (Number.isInteger(t.y) && t.y >= 0 && t.y <= 2000 && t.question === "geetest:slide") out.y = t.y;
       if (Number.isInteger(t.count) && t.count >= 1 && t.count <= 9 && t.question.startsWith("geetest:nine")) out.count = t.count;
       if (Array.isArray(t.hints) && t.hints.length) {
         if (t.hints.length > 8 || !t.hints.every((h) => str(h, 4 * 1024 * 1024))) break;
