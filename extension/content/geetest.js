@@ -661,6 +661,12 @@
     // time; only the holder's / panel's state classes say the puzzle was passed
     if (gtVisible("success").length || gtVisible("radar_success").length || gtVisible("lock_success").length ||
         gtVisible("panel_success").length) return true;
+    return false;
+  }
+
+  // The puzzle went away without a success state (e.g. GeeTest v3 answers "forbidden" and
+  // resets the widget to "Click to verify"): that is NOT a solve.
+  function closedWithoutSuccess(ch) {
     return !ch.root || !ch.root.isConnected || !CS.isVisible(ch.root);
   }
 
@@ -670,6 +676,10 @@
     while (Date.now() < end) {
       await CS.sleep(250);
       if (succeeded(ch)) return "ok";
+      if (closedWithoutSuccess(ch)) {
+        await CS.sleep(400); // a success state may appear right after the popup closes
+        return succeeded(ch) ? "ok" : "rejected";
+      }
       const now = detect();
       if (now && signature(now) !== sig) return "next";
     }
@@ -760,6 +770,10 @@
         } else {
           badge.set("solving", `${label(ch)}: wrong answer, next puzzle`, false);
         }
+      } else if (v === "rejected") {
+        state.gaveUp = true;
+        badge.set("error", `${label(ch)}: ${detail}, but GeeTest rejected it (no success state)`, true);
+        CS.outcome(KIND, false, `${label(ch)}: rejected by GeeTest after ${detail}`, Date.now() - started);
       } else {
         state.gaveUp = true;
         badge.set("error", `${label(ch)}: ${detail}, but GeeTest gave no verdict`, true);

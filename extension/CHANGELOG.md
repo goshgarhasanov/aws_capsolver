@@ -14,6 +14,9 @@ All notable changes to the Captchosa browser extension. Versions follow
   dragging; the piece position is now read from the canvas content.
 - **False "solved".** Real v3 keeps `.geetest_success_radar_tip` & co. in the DOM all the time;
   success now comes only from the state classes.
+- **A rejected v3 answer was reported as solved.** When GeeTest answers `forbidden` it resets
+  the widget to "Click to verify"; a closed popup without a success state now counts as
+  rejected, not solved.
 - **v4 landed ~4 px off.** The live v4 widget moves the piece about 4 px when the button is
   released and verifies that position; the drag now aims short by that jump (re-measured on
   every drag of the page).
