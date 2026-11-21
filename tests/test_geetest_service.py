@@ -61,8 +61,8 @@ def fake_module(**overrides):
         calls.append(("click", kind, hints))
         return [(60, 70), (200.0, 100), (140, 150)]
 
-    def nine_grid(image, target):
-        calls.append(("nine", target))
+    def nine_grid(image, target, count=None):
+        calls.append(("nine", target) if count is None else ("nine", target, count))
         return [5, 1, 5]
 
     def gobang(board):
@@ -129,6 +129,9 @@ def test_parse_families():
     {"question": "geetest:nine:car", "targetImage": ICON},
     {"question": "geetest:slide:car"},
     {"question": "geetest:icon", "targetImage": ICON},
+    {"question": "geetest:nine:car", "count": 0},
+    {"question": "geetest:nine:car", "count": "3"},
+    {"question": "geetest:slide", "count": 3},
 ])
 def test_parse_rejects_bad_payloads(fields):
     task = _task("geetest:slide")
@@ -156,6 +159,8 @@ def test_run_each_family(model):
     assert model.calls[-1] == ("click", "icon", None)
     assert run_geetest(parse_geetest(_task("geetest:nine:car"))) == {"objects": [1, 5]}
     assert model.calls[-1] == ("nine", "car")
+    run_geetest(parse_geetest(_task("geetest:nine:car", count=2)))
+    assert model.calls[-1] == ("nine", "car", 2)
     assert run_geetest(parse_geetest(_task("geetest:gobang"))) == {"move": [[0, 1], [2, 3]]}
 
 

@@ -3,7 +3,7 @@
     "message": "Captchosa"
   },
   "extDescription": {
-    "message": "Решает капчи AWS WAF, BLS и картинки через ваш собственный сервис Captchosa."
+    "message": "Решает капчи AWS WAF, GeeTest, BLS и картинки через ваш собственный сервис Captchosa."
   },
   "on": {
     "message": "Вкл."
@@ -32,6 +32,9 @@
   "kind_text": {
     "message": "Обычный текст"
   },
+  "kind_geetest": {
+    "message": "GeeTest"
+  },
   "desc_awsGrid": {
     "message": "Сетка картинок в виджете AWS WAF"
   },
@@ -46,6 +49,9 @@
   },
   "desc_text": {
     "message": "Любая текстовая капча-картинка на любом сайте (находится автоматически)"
+  },
+  "desc_geetest": {
+    "message": "GeeTest v3/v4: слайдер, клик по иконкам/словам, сетка 3×3, гобанг"
   },
   "closeBadge": {
     "message": "Скрыть"

@@ -224,6 +224,12 @@ def scenarios(context, args):
     time.sleep(0.3)
     check("retries stepper", up == 4 and ext.storage("settings")["retries"] == 3, str(up))
 
+    if args.only == "geetest":
+        geetest_scenarios(context, ext)
+        ext.settings(serviceUrl=SERVICE)
+        geetest_real_service(context)
+        return
+
     # ---- AWS WAF grid: open shadow root, fetch, first answer rejected (2 rounds)
     page = context.new_page()
     page.goto(f"{FIX}/fixtures/aws_shadow.html")
@@ -427,6 +433,8 @@ def scenarios(context, args):
           all(c == 0 for c in covers), repr(covers))
     page.close()
 
+    geetest_scenarios(context, ext)
+
     # switching the general solver off stops it live
     ext.settings(solvers={"text": False})
     page = context.new_page()
@@ -448,6 +456,8 @@ def scenarios(context, args):
           f"filled {value!r} (truth {BLSPL_TRUTH})" if value else f"badge {page_badge(page)!r}")
     page.close()
 
+    geetest_real_service(context)
+
     # ---- popup reflects counters and log
     opt.reload()
     opt.wait_for_selector("#log li")
@@ -462,12 +472,126 @@ def scenarios(context, args):
           popup.inner_text("#statusPill"))
 
 
+def geetest_scenarios(context, ext):
+    """GeeTest v3 / v4 fixture pages against the mocked GeeTestClassification (service = mock)."""
+
+    ext.settings(serviceUrl=f"{FIX}/mockapi")
+
+    def gt_logs(page_name, type_, since):
+        return [e for e in fixture_log()["geetest"][since:] if e.get("page") == page_name and e.get("type") == type_]
+
+    def run_page(version, type_, mode=""):
+        since = len(fixture_log()["geetest"])
+        n_mock = len(fixture_log()["mockapi"])
+        imgs_before = list(fixture_log()["geetest_images"])
+        page = context.new_page()
+        page.goto(f"{FIX}/fixtures/geetest_{version}.html?type={type_}&mode={mode}")
+        ok = wait_until(lambda: page.title() == "GEETEST OK", 90)
+        if ok:  # the pill turns green once the solver has seen the verdict
+            wait_until(lambda: (page_badge(page) or [""])[0].endswith("ok"), 5)
+        logs = [e for e in gt_logs(version, type_, since) if e.get("event") != "open"]
+        mocks = [m for m in fixture_log()["mockapi"][n_mock:] if m.get("type") == "GeeTestClassification"]
+        imgs = fixture_log()["geetest_images"][len(imgs_before):]
+        badge = page_badge(page)
+        page.close()
+        return ok, logs, mocks, imgs, badge
+
+    # v3 slide: canvases, 1:1 slider, the first answer is rejected -> second round accepted
+    ok, logs, mocks, _, badge = run_page("v3", "slide", "wrongfirst")
+    last = logs[-1] if logs else {}
+    check("geetest v3 slide: solved in 2 rounds (first rejected)", ok and len(logs) == 2 and last.get("accepted"),
+          json.dumps(logs))
+    check("geetest v3 slide: piece over the gap at x=172 (+-3 px)", ok and abs(last.get("final", 0) - 172) <= 3,
+          json.dumps(last))
+    check("geetest v3 slide: human-like drag (many moves, >300 ms, vertical wobble, overshoot)",
+          last.get("moves", 0) >= 15 and last.get("ms", 0) >= 300 and last.get("yRange", 0) > 0 and last.get("backtrack"),
+          json.dumps(last))
+    m = mocks[0] if mocks else {}
+    check("geetest v3 slide: task shape (bg + piece cut from the slice canvas + full background)",
+          m.get("question") == "geetest:slide" and m.get("size") == [260, 160] and (m.get("piece") or [0])[0] in (54, 55) and (m.get("piece") or [0, 0])[1] == 160
+          and m.get("fullBackground") is True, json.dumps(mocks))
+    check("geetest v3 slide: pill shows success", badge and badge[0].endswith("ok"), repr(badge))
+
+    # v3 word click: one <img> with a hint strip, scaled to 306 px; clicks in order, then commit
+    ok, logs, mocks, imgs, _ = run_page("v3", "click")
+    last = logs[-1] if logs else {}
+    check("geetest v3 click: 3 points clicked in order + commit", ok and last.get("accepted"), json.dumps(logs))
+    m = mocks[0] if mocks else {}
+    check("geetest v3 click: word task with the hint characters",
+          m.get("question") == "geetest:word" and m.get("hints") == ["天", "地", "人"] and m.get("size") == [344, 384],
+          json.dumps(m))
+    check("geetest v3 click: picture read from the page (downloaded once)", imgs.count("v3click") == 1, repr(imgs))
+
+    # v4 slide: CSS background pictures, hashed classes, pointer events, piece/handle ratio != 1
+    ok, logs, mocks, imgs, _ = run_page("v4", "slide")
+    last = logs[-1] if logs else {}
+    check("geetest v4 slide: piece over the gap at x=172 (+-3 px), first round", ok and len(logs) == 1 and
+          abs(last.get("final", 0) - 172) <= 3, json.dumps(logs))
+    m = mocks[0] if mocks else {}
+    check("geetest v4 slide: task shape (bg 320x160 + piece 64x64)",
+          m.get("size") == [320, 160] and m.get("piece") == [64, 64], json.dumps(m))
+    check("geetest v4 slide: pictures not downloaded again", imgs.count("v4bg") == 1 and imgs.count("v4piece") == 1,
+          repr(imgs))
+
+    # v4 icon: hint icons sent as pictures, clicks on a 600x400 picture shown at 300x200
+    ok, logs, mocks, _, _ = run_page("v4", "icon")
+    check("geetest v4 icon: clicks in order + submit", ok and logs and logs[-1].get("accepted"), json.dumps(logs))
+    m = mocks[0] if mocks else {}
+    check("geetest v4 icon: task with 3 hint pictures", m.get("question") == "geetest:icon" and
+          m.get("hints") == [[30, 30]] * 3 and m.get("size") == [600, 400], json.dumps(m))
+
+    # v4 nine-grid: 9 cell pictures drawn into one grid picture, target picture
+    ok, logs, mocks, _, _ = run_page("v4", "nine")
+    check("geetest v4 nine: picked cells 1,5,6 + submit", ok and logs and logs[-1].get("picked") == [1, 5, 6],
+          json.dumps(logs))
+    m = mocks[0] if mocks else {}
+    check("geetest v4 nine: grid picture 300x300 + target picture", m.get("question") == "geetest:nine" and
+          m.get("size") == [300, 300] and m.get("targetImage") == [30, 30], json.dumps(m))
+
+    # v4 gobang (winlinze): 5x5 board, move (0,1) -> (2,3)
+    ok, logs, mocks, _, _ = run_page("v4", "gobang")
+    check("geetest v4 gobang: move clicked", ok and logs and logs[-1].get("clicks") == [[0, 1], [2, 3]], json.dumps(logs))
+    m = mocks[0] if mocks else {}
+    check("geetest v4 gobang: board picture 300x300", m.get("question") == "geetest:gobang" and m.get("size") == [300, 300],
+          json.dumps(m))
+
+    # the GeeTest switch: off -> the widget is not even opened
+    ext.settings(solvers={"geetest": False})
+    since = len(fixture_log()["geetest"])
+    n_mock = len(fixture_log()["mockapi"])
+    page = context.new_page()
+    page.goto(f"{FIX}/fixtures/geetest_v4.html?type=icon")
+    time.sleep(4)
+    check("geetest: off when switched off", not fixture_log()["geetest"][since:] and
+          len(fixture_log()["mockapi"]) == n_mock and page.title() != "GEETEST OK")
+    page.close()
+    ext.settings(solvers={"geetest": True})
+
+
+def geetest_real_service(context):
+    """Against the real service the model may be missing: a typed error in the pill, or solved."""
+    since = len(fixture_log()["geetest"])
+    page = context.new_page()
+    page.goto(f"{FIX}/fixtures/geetest_v4.html?type=slide")
+    got = wait_until(lambda: page.title() == "GEETEST OK" or
+                     ((page_badge(page) or [""])[0].endswith("error") and page_badge(page)), 90)
+    badge = page_badge(page)
+    drops = [e for e in fixture_log()["geetest"][since:] if e.get("event") == "verify"]
+    # with the model installed the answer is applied (the synthetic picture may still fool it);
+    # without it the pill shows the service's typed error
+    check("geetest (real service): answer applied, or a typed error", bool(got) and (
+          page.title() == "GEETEST OK" or bool(drops) or (badge and badge[1].split(":")[0].startswith("ERROR_"))),
+          f"{badge!r} drops={json.dumps(drops)}")
+    page.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--grids", type=int, default=4)
     ap.add_argument("--grant-all-urls", action="store_true",
                     help="load a copy of the extension with <all_urls> granted (cross-origin captcha path)")
+    ap.add_argument("--only", choices=("geetest",), help="run only one group of scenarios")
     args = ap.parse_args()
     run(args)
     failed = [r for r in results if not r[1]]

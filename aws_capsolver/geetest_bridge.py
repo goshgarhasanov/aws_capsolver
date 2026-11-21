@@ -5,7 +5,7 @@ The package exposes four solvers and three typed errors:
 
 * ``slide_offset(background, piece=None, full_background=None) -> int``
 * ``click_points(image, kind, hints=None) -> [(x, y), ...]`` (kind icon | word | space)
-* ``nine_grid(image, target) -> [index, ...]`` (0-based, row-major)
+* ``nine_grid(image, target, count=None) -> [index, ...]`` (0-based, row-major)
 * ``gobang(board) -> ((row, col), (row, col))``
 * ``GeeTestError`` > ``UnsupportedGeeTest`` / ``InvalidGeeTestInput``
 
@@ -145,7 +145,8 @@ def _pair(value: Any, what: str) -> Tuple[int, int]:
 
 def slide_offset(background: bytes, piece: Optional[bytes] = None,
                  full_background: Optional[bytes] = None) -> int:
-    """x (background pixels) where the left edge of the piece must end."""
+    """x (background pixels) where the piece image's left edge must end (the drag distance);
+    without a piece, the left edge of the gap."""
     return _int(_call("slide_offset", background, piece=piece, full_background=full_background), "x")
 
 
@@ -164,9 +165,9 @@ def click_points(image: bytes, kind: str, hints: Optional[Sequence[Union[str, by
     return [_pair(p, "point") for p in items]
 
 
-def nine_grid(image: bytes, target: Union[str, bytes]) -> List[int]:
-    """Cells (0-based, row-major) that show the target."""
-    raw = _call("nine_grid", image, target)
+def nine_grid(image: bytes, target: Union[str, bytes], count: Optional[int] = None) -> List[int]:
+    """Cells (0-based, row-major) that show the target; `count` = how many to pick, if known."""
+    raw = _call("nine_grid", image, target) if count is None else _call("nine_grid", image, target, count=count)
     try:
         items = list(raw)
     except TypeError as exc:

@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const KINDS = ["awsGrid", "awsToken", "blsGrid", "blsText", "text"];
+  const KINDS = ["awsGrid", "awsToken", "blsGrid", "blsText", "text", "geetest"];
   const LANGS = ["auto", "en", "tr", "az", "ru"];
 
   // v2: the general text solver is on by default (it used to be off, so captchas on most
@@ -17,7 +17,7 @@
     autoSolve: true,
     delayMs: 800,          // pause before solving a freshly detected captcha
     retries: 3,            // rounds per captcha (new puzzle after a wrong answer)
-    solvers: { awsGrid: true, awsToken: true, blsGrid: true, blsText: true, text: true },
+    solvers: { awsGrid: true, awsToken: true, blsGrid: true, blsText: true, text: true, geetest: true },
     blsGridSubmit: true,   // press Verify after picking BLS tiles (never with an empty password)
     submitAfterFill: false, // submit the form after filling a text captcha (auto-solve only)
     pageBadge: true,       // small status pill next to the captcha

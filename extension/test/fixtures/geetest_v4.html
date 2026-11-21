@@ -1,0 +1,185 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GeeTest v4 fixture</title>
+<!-- Local reproduction of the GeeTest v4 in-page box (gcaptcha4.js): hashed class names
+     (geetest_bg_3a8f21 ...), pictures as CSS background images served by the fixture server,
+     pointer events, and the slide / icon / nine / gobang (winlinze) layouts. The page checks
+     the answer against the mocked model answer and logs every attempt to /geetest/log. -->
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  .geetest_btn_click { width: 300px; height: 44px; border: 1px solid #ccc; border-radius: 4px; display: flex;
+    align-items: center; padding-left: 12px; cursor: pointer; }
+  .geetest_box_wrap { display: none; position: absolute; left: 40px; top: 110px; background: #fff;
+    border: 1px solid #ccc; box-shadow: 0 2px 10px #0003; padding: 12px; }
+  .geetest_boxshow .geetest_box_wrap { display: block; }
+  .geetest_bg_3a8f21 { position: relative; background-size: 100% 100%; background-repeat: no-repeat; }
+  .geetest_slice_5d2c11 { position: absolute; left: 0; top: 50px; width: 56px; height: 56px; }
+  .geetest_slice_bg_e01b77 { width: 100%; height: 100%; background-size: 100% 100%; }
+  .geetest_track_04cd2a { position: relative; width: 280px; height: 40px; margin-top: 10px; background: #eef; border-radius: 20px; }
+  .geetest_btn_9c1e0b { position: absolute; left: 0; top: 0; width: 48px; height: 40px; background: #39f; border-radius: 20px;
+    touch-action: none; cursor: pointer; }
+  .geetest_ques_tips_77ab01 { display: flex; gap: 6px; align-items: center; height: 36px; font-size: 14px; }
+  .geetest_ques_tips_77ab01 img { width: 30px; height: 30px; }
+  .geetest_submit_c0ffee { margin-top: 8px; background: #39f; color: #fff; text-align: center; padding: 9px;
+    border-radius: 4px; cursor: pointer; }
+  .geetest_square_mark { position: absolute; width: 16px; height: 16px; margin: -8px; background: #39f;
+    border-radius: 50%; pointer-events: none; }
+  .geetest_table_box_51e0aa { display: grid; gap: 2px; background: #ddd; }
+  .geetest_item_b1c2d3 { position: relative; background: #fafafa; cursor: pointer; }
+  .geetest_item_img_a1a1a1 { width: 100%; height: 100%; background-size: 100% 100%; }
+  .geetest_item_select { outline: 3px solid #39f; outline-offset: -3px; }
+</style></head>
+<body>
+<h1>GeeTest v4 fixture</h1>
+<div class="geetest_captcha" id="captcha">
+  <div class="geetest_btn_click" id="open">点击按钮开始验证</div>
+  <div class="geetest_box_wrap"><div class="geetest_box" id="box"></div></div>
+</div>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const TYPE = q.get("type") || "slide";
+const BG_SCALE = 280 / 320;        // slide picture: 320x160 shown at 280x140
+const PIECE_MARGIN = 4;            // transparent margin of the 64x64 piece picture
+const GAP_X = 172;
+const CLICKS = [[60, 70], [230, 110], [140, 260]];
+const NINE = [1, 5, 6];
+let attempts = 0;
+
+function log(entry) {
+  return fetch("/geetest/log", { method: "POST", body: JSON.stringify(Object.assign({ page: "v4", type: TYPE }, entry)) });
+}
+
+function success() {
+  const c = document.getElementById("captcha");
+  c.classList.remove("geetest_boxshow");
+  const open = document.getElementById("open");
+  open.classList.add("geetest_success");
+  open.textContent = "验证成功";
+  document.title = "GEETEST OK";
+}
+
+// single quotes: the value goes into a double-quoted style="" attribute
+function img(name) { return `url('/geetest/img?name=${name}')`; }
+
+document.getElementById("open").addEventListener("click", () => {
+  const c = document.getElementById("captcha");
+  if (document.getElementById("open").classList.contains("geetest_success") || c.classList.contains("geetest_boxshow")) return;
+  c.classList.add("geetest_boxshow");
+  ({ slide: buildSlide, icon: buildIcon, nine: buildNine, gobang: buildGobang })[TYPE]();
+  log({ event: "open" });
+});
+
+function verdict(accepted, extra, rebuild) {
+  attempts += 1;
+  log(Object.assign({ event: "verify", attempt: attempts, accepted }, extra));
+  if (accepted) setTimeout(success, 300);
+  else setTimeout(rebuild, 600);
+}
+
+// ---------------------------------------------------------------- slide
+function buildSlide() {
+  const box = document.getElementById("box");
+  box.className = "geetest_box geetest_slide";
+  box.innerHTML = `<div class="geetest_container"><div class="geetest_bg_3a8f21" style="width:280px;height:140px;background-image:${img("v4bg")}">
+    <div class="geetest_slice_5d2c11"><div class="geetest_slice_bg_e01b77" style="background-image:${img("v4piece")}"></div></div></div>
+    <div class="geetest_slider"><div class="geetest_track_04cd2a"><div class="geetest_btn_9c1e0b"></div></div></div></div>`;
+  const btn = box.querySelector(".geetest_btn_9c1e0b");
+  const slice = box.querySelector(".geetest_slice_5d2c11");
+  const ratio = (280 - 56) / (280 - 48);      // v4: the piece travels the free width of the picture
+  let drag = null;
+  btn.addEventListener("pointerdown", (e) => {
+    try { btn.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    drag = { x0: e.clientX, t0: performance.now(), moves: [], dx: 0 };
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    drag.dx = Math.max(0, Math.min(232, e.clientX - drag.x0));
+    drag.moves.push([Math.round(performance.now() - drag.t0), e.clientX, e.clientY]);
+    btn.style.left = `${drag.dx}px`;
+    slice.style.left = `${drag.dx * ratio}px`;
+  });
+  window.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    const left = parseFloat(slice.style.left || "0");
+    const final = (left + PIECE_MARGIN * BG_SCALE) / BG_SCALE;
+    const ys = d.moves.map((m) => m[2]);
+    verdict(Math.abs(final - GAP_X) <= 3, { final: Math.round(final * 10) / 10, moves: d.moves.length,
+      ms: Math.round(performance.now() - d.t0), yRange: Math.max(...ys) - Math.min(...ys) }, buildSlide);
+  });
+}
+
+// ---------------------------------------------------------------- icon click
+function buildIcon() {
+  const box = document.getElementById("box");
+  box.className = "geetest_box geetest_icon";
+  box.innerHTML = `<div class="geetest_header"><div class="geetest_ques_tips_77ab01">请依次点击：
+    <img src="/geetest/img?name=icon1" alt=""><img src="/geetest/img?name=icon2" alt=""><img src="/geetest/img?name=icon3" alt=""></div></div>
+    <div class="geetest_container"><div class="geetest_bg_3a8f21" style="width:300px;height:200px;background-image:${img("v4click")}"></div></div>
+    <div class="geetest_submit_c0ffee">确认</div>`;
+  const bg = box.querySelector(".geetest_bg_3a8f21");
+  const clicks = [];
+  bg.addEventListener("click", (e) => {
+    const r = bg.getBoundingClientRect();
+    clicks.push([(e.clientX - r.left) * 2, (e.clientY - r.top) * 2]);
+    const m = document.createElement("div");
+    m.className = "geetest_square_mark";
+    m.style.left = `${e.clientX - r.left}px`;
+    m.style.top = `${e.clientY - r.top}px`;
+    bg.appendChild(m);
+  });
+  box.querySelector(".geetest_submit_c0ffee").addEventListener("click", () => {
+    const ok = clicks.length === 3 && clicks.every((p, i) => Math.abs(p[0] - CLICKS[i][0]) <= 5 && Math.abs(p[1] - CLICKS[i][1]) <= 5);
+    verdict(ok, { clicks: clicks.map((p) => p.map(Math.round)) }, buildIcon);
+  });
+}
+
+// ---------------------------------------------------------------- nine-grid
+function buildNine() {
+  const box = document.getElementById("box");
+  box.className = "geetest_box geetest_nine";
+  let cells = "";
+  for (let i = 0; i < 9; i++) {
+    cells += `<div class="geetest_item_b1c2d3" data-i="${i}" style="width:90px;height:90px">` +
+      `<div class="geetest_item_img_a1a1a1" style="background-image:${img("cell" + i)}"></div></div>`;
+  }
+  box.innerHTML = `<div class="geetest_header"><div class="geetest_ques_tips_77ab01">请选择所有：<img src="/geetest/img?name=target" alt=""></div></div>
+    <div class="geetest_table_box_51e0aa" style="grid-template-columns:repeat(3,90px)">${cells}</div>
+    <div class="geetest_submit_c0ffee">确认</div>`;
+  const picked = new Set();
+  box.querySelectorAll(".geetest_item_b1c2d3").forEach((c) => c.addEventListener("click", () => {
+    const i = Number(c.dataset.i);
+    if (picked.has(i)) picked.delete(i); else picked.add(i);
+    c.classList.toggle("geetest_item_select");
+  }));
+  box.querySelector(".geetest_submit_c0ffee").addEventListener("click", () => {
+    const sel = [...picked].sort((a, b) => a - b);
+    verdict(JSON.stringify(sel) === JSON.stringify(NINE), { picked: sel }, buildNine);
+  });
+}
+
+// ---------------------------------------------------------------- gobang (winlinze)
+function buildGobang() {
+  const box = document.getElementById("box");
+  box.className = "geetest_box geetest_winlinze";
+  const stones = { 1: "stone_b", 6: "stone_b", 12: "stone_w", 16: "stone_b", 18: "stone_w", 24: "stone_b" };
+  let cells = "";
+  for (let i = 0; i < 25; i++) {
+    const s = stones[i] ? ` style="background-image:${img(stones[i])}"` : "";
+    cells += `<div class="geetest_item_b1c2d3" data-i="${i}" style="width:50px;height:50px">` +
+      `<div class="geetest_item_img_a1a1a1"${s}></div></div>`;
+  }
+  box.innerHTML = `<div class="geetest_header"><div class="geetest_ques_tips_77ab01">移动一颗棋子，连成五子</div></div>
+    <div class="geetest_table_box_51e0aa" style="grid-template-columns:repeat(5,50px)">${cells}</div>`;
+  const clicks = [];
+  box.querySelectorAll(".geetest_item_b1c2d3").forEach((c) => c.addEventListener("click", () => {
+    const i = Number(c.dataset.i);
+    clicks.push([Math.floor(i / 5), i % 5]);
+    if (clicks.length === 2) {
+      verdict(JSON.stringify(clicks) === JSON.stringify([[0, 1], [2, 3]]), { clicks: clicks.slice() }, buildGobang);
+    }
+  }));
+}
+</script>
+</body></html>

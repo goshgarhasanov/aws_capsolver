@@ -23,6 +23,7 @@ In manual mode a branded badge with a **Solve** button sits next to the captcha:
 | AWS WAF token | challenge pages with `window.gokuProps` + `challenge.js` | `AntiAwsWafTaskProxyLess` → `aws-waf-token` cookie |
 | BLS grid | `.box-label` + `img.captcha-img` (BLS Spain etc.) | `BlsClassification` (`bls:grid:NNN`, 9 tiles in page order) |
 | BLS Poland text | `img[src*=captcha]` + `input[name=captcha_code]` | `ImageToTextTask`, module `bls_poland` |
+| GeeTest | GeeTest v3 popup (`.geetest_canvas_bg` + `.geetest_slider_button`, `.geetest_item_img` + `.geetest_commit`) and v4 box (`.geetest_bg`, `.geetest_btn`, `.geetest_item`, `.geetest_submit`, hashed class suffixes too) | `GeeTestClassification` (`geetest:slide`, `geetest:icon`, `geetest:word`, `geetest:space`, `geetest:nine[:<word>]`, `geetest:gobang`) |
 | General text (on by default) | any picture (`img`, `canvas`, `input[type=image]`, captcha background image; also in open shadow roots) paired with a nearby captcha-like text input | `ImageToTextTask`, module `common` |
 
 How each one works:
@@ -36,6 +37,21 @@ How each one works:
 - **BLS grid** – only labels and tiles that are visible *and* win a centre hit-test count (BLS hides
   decoys with `display`, `visibility`, `opacity`, off-screen positions and stacking). Verify is
   pressed only when *Press Verify after BLS grid* is on and no password field is empty.
+- **GeeTest** (`content/geetest.js`) – with *Auto-solve* the "click to verify" button (v3 radar,
+  v4 `geetest_btn_click`) is pressed once, then the puzzle type is taken from GeeTest's class names
+  (`geetest_slide` / `geetest_icon` / `geetest_word` / `geetest_nine` / `geetest_winlinze`…) or
+  from the layout. Pictures are read from the page: v3 canvases directly, `<img>` through a
+  canvas, CSS background pictures from the memory cache (cross-origin ones with CORS, as GeeTest's
+  CDN allows); only when that fails is the element cut out of a tab screenshot (top frame, needs
+  *Allow on all sites*). Answers are applied like a person: the slider is dragged along a
+  minimum-jerk path with a slow vertical wobble, a small overshoot and a settle-back, 0.7–2.2 s in
+  total, with pointer **and** mouse events; the drag is closed-loop (it measures how far the piece
+  really moved, so the piece/handle ratio of v3 and v4 does not matter). Click puzzles get paced
+  clicks at the returned points (scaled from picture pixels to the element), nine-grid cells and
+  gobang moves are clicked, then Confirm / Submit. A fresh puzzle after the answer counts as a
+  wrong round (up to *Retries*); a success class or the widget closing counts as solved.
+  Token-producing GeeTest solving (gt/challenge → validate) is not done: the answer always goes
+  through the real widget.
 - **Text captchas** – the general solver pairs a picture with a text input. An input counts when
   its name/id/placeholder/aria-label, its `<label>` or the text around it talks about a captcha /
   security / verification code (English, Turkish, Azerbaijani, Russian wording); a picture counts
@@ -88,7 +104,10 @@ python3 extension/tools/build_extension.py patch      # or minor / major, or not
 
 The fixtures (`test/fixtures/`, `test/fixture_server.py`) imitate the AWS widget (mocked
 `/problem` + `/verify` from `data/samples/problem_visual.json`), the BLS grid (real tiles from
-`bls_capsolver/data/real` with hidden, covered and off-screen decoys) and the BLS Poland login.
+`bls_capsolver/data/real` with hidden, covered and off-screen decoys), the BLS Poland login and
+GeeTest v3 (slide with a rejected first round, word click) and v4 (slide, icon, nine-grid, gobang)
+against a mocked `GeeTestClassification`; the GeeTest pages check the drop position / click order
+themselves and log the drag (moves, duration, vertical range, overshoot).
 No third-party site is visited.
 
 ## Known limits
@@ -98,5 +117,10 @@ No third-party site is visited.
 - The AWS token is solved by the service with its own network path; the cookie is set for the
   current host and the browser's user agent is passed along. A voucher-only answer cannot be used.
 - Cross-origin text-captcha images without CORS cannot be read (`IMAGE_TAINTED`).
+- GeeTest's DOM is reproduced from its public widgets in the local fixtures
+  (`test/fixtures/geetest_v3.html`, `geetest_v4.html`); class names on a live site may differ.
+  GeeTest also scores the drag itself, and synthetic (`isTrusted === false`) events may be
+  rejected by its risk engine even when the position is right. The v3 "match" and v4 "match" /
+  "ai" types are not supported.
 - The AWS widget's real DOM may change; detection looks for any group of N similar cells inside
   the widget plus a Confirm/Verify button, with a single-canvas coordinate fallback.

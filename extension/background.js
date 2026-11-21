@@ -19,7 +19,9 @@ const TASK_TYPES = {
   blsGrid: "BlsClassification",
   blsText: "ImageToTextTask",
   text: "ImageToTextTask",
+  geetest: "GeeTestClassification",
 };
+const GEETEST_QUESTION = /^geetest:(slide|icon|word|space|gobang|nine(:[^\x00-\x1f]{1,64})?)$/;
 // ImageToTextTask module per text solver
 const TEXT_MODULES = { blsText: "bls_poland", text: "common" };
 
@@ -130,6 +132,19 @@ function buildTask(kind, raw) {
       if (!str(t.body, 4 * 1024 * 1024)) break;
       // case: true = case-sensitive (the answer keeps upper/lower case exactly as read)
       return { type: TASK_TYPES[kind], body: t.body, module: TEXT_MODULES[kind], case: true };
+    case "geetest": {
+      if (!str(t.question, 80) || !GEETEST_QUESTION.test(t.question) || !b64list(t.images, 1, 1)) break;
+      const out = { type: TASK_TYPES.geetest, question: t.question, images: t.images };
+      for (const k of ["piece", "fullBackground", "targetImage"]) {
+        if (str(t[k], 4 * 1024 * 1024)) out[k] = t[k];
+      }
+      if (Number.isInteger(t.count) && t.count >= 1 && t.count <= 9 && t.question.startsWith("geetest:nine")) out.count = t.count;
+      if (Array.isArray(t.hints) && t.hints.length) {
+        if (t.hints.length > 8 || !t.hints.every((h) => str(h, 4 * 1024 * 1024))) break;
+        out.hints = t.hints;
+      }
+      return out;
+    }
     case "awsToken": {
       if (!str(t.websiteURL, 2048) || !/^https?:\/\//i.test(t.websiteURL)) break;
       const out = { type: TASK_TYPES.awsToken, websiteURL: t.websiteURL };

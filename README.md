@@ -1,6 +1,6 @@
 # captchosa (package `aws_capsolver`)
 
-A self-hosted AWS WAF, BLS and text captcha solving service that speaks the CapSolver API. A client that already
+A self-hosted AWS WAF, GeeTest, BLS and text captcha solving service that speaks the CapSolver API. A client that already
 talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 
 - `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess`: solve a site's AWS WAF (PoW challenge,
@@ -8,6 +8,8 @@ talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 - `AwsWafClassification`: answer one already-fetched CAPTCHA problem (grid tiles).
 - `BlsClassification`: the BLS "select all boxes with number NNN" grid (bls_capsolver CNN).
 - `ImageToTextTask`: text captchas (BLS Poland model, general model, ddddocr fallback).
+- `GeeTestClassification`: one already-fetched GeeTest v3/v4 picture (slide gap, icon / word /
+  space click points, nine-grid cells, gobang move). Token-producing `GeeTestTask` is out of scope.
 - `getBalance`, `getTaskResult`, `/health`.
 
 Contents: [Layout](#layout) - [Quick start](#quick-start) - [API reference](#api-reference) -
@@ -272,6 +274,49 @@ The ddddocr fallback needs `pip install ddddocr` (works on Python 3.12 and 3.14;
 onnxruntime and opencv-python-headless). With `AWSCS_WARMUP=1` every installed text model
 is loaded at startup.
 
+### POST /createTask - GeeTestClassification (synchronous)
+
+Answers one GeeTest v3 / v4 challenge picture that the client already has (the browser
+extension reads it from the page). The reply says *where* to drag or click; performing the
+action in the widget is up to the client. Models: `aws_capsolver/geetest` (loaded lazily on
+the first task; without it every task fails with `ERROR_TASK_NOT_SUPPORTED` and is refunded).
+
+```bash
+curl -s localhost:8790/createTask -H 'content-type: application/json' -d '{"clientKey":"K","task":{
+  "type":"GeeTestClassification","question":"geetest:slide",
+  "images":["iVBOR...background"],"piece":"iVBOR...piece","fullBackground":"iVBOR..."}}'
+```
+```json
+{"errorId": 0, "taskId": "...", "status": "ready", "solution": {"x": 168}}
+```
+
+| `question` | other fields | `solution` |
+|---|---|---|
+| `geetest:slide` | `piece` (optional, the piece picture with alpha), `fullBackground` (optional, v3 picture without the gap) | `{"x": 168}`: with a piece, where the piece **image's** left edge must end (= the drag distance, in background-picture pixels); without one, the left edge of the gap. Scale by displayed width / picture width |
+| `geetest:icon` | `hints` (optional): the small icons to click, in order, as base64 pictures (a v3 344x384 picture may omit them: they are cut from its bottom strip) | `{"points": [[x, y], ...]}` in picture pixels, in click order |
+| `geetest:word` | `hints` (optional): the characters to click, in order (`["天", "地"]`) | `{"points": [[x, y], ...]}` |
+| `geetest:space` | `hints` (optional): the question text, one string | `{"points": [[x, y], ...]}` |
+| `geetest:nine:<word>` or `geetest:nine` + `targetImage` | the target as a word in the question, or as a base64 picture; `count` (optional, 1-9): how many cells to pick | `{"objects": [1, 5, 6]}`: cells (0-based, row-major) of the 3x3 grid picture |
+| `geetest:gobang` | - | `{"move": [[0, 1], [2, 3]]}`: (row, col) of the stone to move and of the cell to move it to |
+
+`images` holds exactly **one** picture (base64 or a `data:` URL, at most 2 MB and 2000 px per
+side): the slide background, the click picture, the whole nine-grid or the whole gobang
+board. At most 8 `hints`; word / space hints are strings of at most 64 characters.
+
+Errors: `ERROR_INVALID_TASK_DATA` (bad `question`, not exactly one image, undecodable or
+oversized picture, a field that does not belong to the family - e.g. `piece` with
+`geetest:icon` -, nine without a target or with two targets, the model rejecting the picture),
+`ERROR_TASK_NOT_SUPPORTED` (unknown family such as `geetest:match`, the model package or the
+family's solver is not installed, weights missing), `ERROR_CAPTCHA_UNSOLVABLE` (the model
+found no answer, or its answer is outside the picture / grid / board). Failed tasks are
+refunded. It shares the classification runners, queue and limits with the other synchronous
+tasks. Price: 8 tokens; a family may have its own price (`"GeeTestClassification:gobang": 12`).
+
+Out of scope: **token-producing GeeTest tasks** (`GeeTestTask` with `gt` / `challenge` /
+`captcha_id` that return `validate` / `seccode` or `lot_number` / `pass_token`). They would
+need GeeTest's `w` parameter encryption, which this project deliberately does not
+reverse-engineer. The answer is always applied in the real widget by the client.
+
 ### POST /getBalance
 
 ```bash
@@ -280,7 +325,7 @@ curl -s localhost:8790/getBalance -d '{"clientKey":"MY-KEY"}'
 ```json
 {"errorId": 0, "balance": 9850, "tokens": 9850, "balanceUsd": 9.85, "tokensPerUsd": 1000,
  "prices": {"AntiAwsWafTask": 30, "AntiAwsWafTaskProxyLess": 30, "AwsWafClassification": 10,
-            "BlsClassification": 5, "ImageToTextTask": 2},
+            "BlsClassification": 5, "GeeTestClassification": 8, "ImageToTextTask": 2},
  "packages": [],
  "usage": {"AntiAwsWafTask": {"created": 3, "solved": 3, "failed": 0},
            "AwsWafClassification": {"created": 6, "solved": 6, "failed": 0}}}
@@ -298,6 +343,7 @@ Every key holds **tokens**; tokens are sold in packages (`tokens_per_usd`, defau
 | `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess` | 30 |
 | `AwsWafClassification` | 10 |
 | `BlsClassification` | 5 |
+| `GeeTestClassification` | 8 (a family may have its own price, e.g. `"GeeTestClassification:gobang": 12`) |
 | `ImageToTextTask` | 2 (a module may have its own price, e.g. `"ImageToTextTask:bls_poland": 1`) |
 
 * The price is **reserved when the task is accepted** (concurrent tasks cannot overdraw a
@@ -328,14 +374,18 @@ python -m aws_capsolver billing accounts
 
 ```json
 {"ok": true, "version": "0.1.0", "vision": true,
- "text": {"bls_poland": true, "common": true, "ddddocr": true}, "time": 1795127465,
+ "text": {"bls_poland": true, "common": true, "ddddocr": true},
+ "geetest": {"slide_offset": true, "click_points": true, "nine_grid": true, "gobang": true},
+ "time": 1795127465,
  "load": {"tasks_active": 0, "waf_queued": 0, "waf_running": 0, "classify_queued": 0,
           "classify_running": 0, "classify_capacity": 9}}
 ```
 `ok` turns `false` while the service is shutting down. `vision` is `false` when the vision
 package cannot be imported; WAF tasks then still solve
 PoW-only pages but every CAPTCHA fails with `ERROR_CAPTCHA_UNSOLVABLE`. `text` says which `ImageToTextTask` modules can be
-imported here (weights are only checked on use). `load` counts WAF tasks and synchronous
+imported here (weights are only checked on use). `geetest` says which GeeTest solvers the
+model package provides (all `false` when it is not installed; a failed import is retried
+every 5 minutes). `load` counts WAF tasks and synchronous
 tasks (`classify_*` covers both classifications and `ImageToTextTask`). Used by the Docker
 healthcheck.
 
@@ -344,8 +394,8 @@ healthcheck.
 | errorCode | returned by | when |
 |---|---|---|
 | `ERROR_KEY_DENIED_ACCESS` | every POST | `clientKey` missing (`clientKey is required`) or not in `keys.json` / `AWSCS_KEYS` (`invalid clientKey`) |
-| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; `ImageToTextTask` without `body`, with an unknown `module` or bad `case` / `numeric` / `minLength` / `maxLength`; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
-| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, a classification question family other than `grid` / `toycarcity`, or an `ImageToTextTask` / `BlsClassification` model that is not installed |
+| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; `ImageToTextTask` without `body`, with an unknown `module` or bad `case` / `numeric` / `minLength` / `maxLength`; `GeeTestClassification` with a bad `question`, not exactly one image, a field of another family, a nine task without (or with two) targets, or a picture the GeeTest model rejects; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
+| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, a classification question family other than `grid` / `toycarcity`, an unknown GeeTest family, or an `ImageToTextTask` / `BlsClassification` / GeeTest model that is not installed |
 | `ERROR_TASKID_INVALID` | getTaskResult | unknown, expired, or another key's `taskId` |
 | `ERROR_CAPTCHA_UNSOLVABLE` | task result / classification | every CAPTCHA round failed, unsupported problem type, vision unavailable, or an internal solver error |
 | `ERROR_PROXY_CONNECT_REFUSED` | task result | the proxy failed, refused the connection, timed out connecting, or answered 407 (proxy authentication) |

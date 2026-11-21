@@ -305,6 +305,7 @@ class GeeTestJob:
     full_background: Optional[bytes] = None
     hints: Tuple[Any, ...] = ()
     target: Any = None           # nine: str (a word) or bytes (a picture)
+    count: Optional[int] = None  # nine: how many cells to pick, when the widget says so
 
 
 def _geetest_question(task: Dict[str, Any]) -> Tuple[str, Optional[str]]:
@@ -380,8 +381,13 @@ def parse_geetest(task: Dict[str, Any]) -> GeeTestJob:
     if family == "nine" and not target:
         raise SolverError(ERROR_INVALID_TASK_DATA,
                           "geetest:nine needs a target (geetest:nine:<word> or targetImage)")
+    count = None
+    if task.get("count") is not None:
+        if family != "nine":
+            raise SolverError(ERROR_INVALID_TASK_DATA, "count is only for geetest:nine")
+        count = _opt_int(task, "count", 1, NINE_CELLS)
     return GeeTestJob(module=family, image=image, piece=piece, full_background=full,
-                      hints=hints, target=target)
+                      hints=hints, target=target, count=count)
 
 
 def _image_size(data: bytes, name: str) -> Tuple[int, int]:
@@ -418,7 +424,7 @@ def run_geetest(job: GeeTestJob) -> Dict[str, Any]:
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, "model returned a point outside the image")
             return {"points": [[x, y] for x, y in points]}
         if job.module == "nine":
-            cells = sorted(set(geetest_bridge.nine_grid(job.image, job.target)))
+            cells = sorted(set(geetest_bridge.nine_grid(job.image, job.target, job.count)))
             if not cells or any(not 0 <= i < NINE_CELLS for i in cells):
                 raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"model returned cells {cells}")
             return {"objects": cells}

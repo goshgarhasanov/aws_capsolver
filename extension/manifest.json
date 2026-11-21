@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "__MSG_extName__",
   "short_name": "Captchosa",
-  "version": "1.0.2",
-  "version_name": "1.0.2",
+  "version": "1.0.3",
+  "version_name": "1.0.3",
   "description": "__MSG_extDescription__",
   "default_locale": "en",
   "minimum_chrome_version": "111",
@@ -65,7 +65,8 @@
         "content/shared.js",
         "content/aws.js",
         "content/bls.js",
-        "content/text.js"
+        "content/text.js",
+        "content/geetest.js"
       ],
       "run_at": "document_start",
       "all_frames": true,

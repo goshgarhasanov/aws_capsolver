@@ -3,6 +3,29 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.3 – 2026-11-21
+
+### Added
+- **GeeTest v3 and v4** solver (`content/geetest.js`, new *GeeTest* switch, on by default):
+  slide, icon / word / space click, nine-grid and gobang (winlinze), through the service's new
+  synchronous `GeeTestClassification` task (8 tokens).
+  - Detects the v3 popup (`.geetest_canvas_bg`, `.geetest_slider_button`, `.geetest_item_img`,
+    `.geetest_commit`) and the v4 box (`.geetest_bg`, `.geetest_btn`, `.geetest_item`,
+    `.geetest_submit`, also with hashed class suffixes); presses the "click to verify" button
+    once with *Auto-solve*.
+  - Reads the pictures from the page (canvas pixels, loaded `<img>`, CSS background pictures from
+    the memory cache, CORS for GeeTest's CDN) and falls back to a tab screenshot only when needed.
+  - Slider: closed-loop, minimum-jerk drag with vertical wobble, overshoot and settle-back,
+    pointer + mouse events. Clicks: paced, in the returned order, then Confirm / Submit.
+  - A fresh puzzle after the answer is a wrong round (up to *Retries*); success or the widget
+    closing counts as solved. The pill, the toolbar badge and the activity log show each step.
+
+### Tests
+- New GeeTest fixture pages (`test/fixtures/geetest_v3.html`, `geetest_v4.html`) with a mocked
+  `GeeTestClassification`: v3 slide (first round rejected), v3 word click, v4 slide (piece/handle
+  ratio ≠ 1), v4 icon, v4 nine-grid, v4 gobang, the solver switch, and the real service (typed
+  error while the model is not installed).
+
 ## 1.0.2 – 2026-11-21
 
 ### Fixed

@@ -1,0 +1,159 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GeeTest v3 fixture</title>
+<!-- Local reproduction of the GeeTest v3 popup DOM (class names as in gt.js 6.x): the radar
+     "click to verify" button, the slide puzzle (bg / slice / fullbg canvases + slider) and the
+     word-click puzzle (one big <img> with a hint strip, commit button). The page verifies the
+     answer itself against the fixture server's mocked model answer and logs every attempt. -->
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  .geetest_holder { width: 300px; height: 44px; border: 1px solid #ccc; border-radius: 3px; display: flex;
+    align-items: center; padding-left: 12px; cursor: pointer; }
+  .geetest_radar_success .geetest_radar_tip { display: none; }
+  .geetest_success_radar_tip { display: none; color: #2a2; }
+  .geetest_radar_success .geetest_success_radar_tip { display: block; }
+  .geetest_panel { display: none; position: absolute; left: 40px; top: 110px; background: #fff;
+    border: 1px solid #ccc; box-shadow: 0 2px 10px #0003; padding: 12px; }
+  .geetest_panel.geetest_show { display: block; }
+  .geetest_window { position: relative; width: 312px; height: 192px; overflow: hidden; }
+  .geetest_table_box .geetest_window { width: auto; height: auto; }
+  .geetest_absolute { position: absolute; left: 0; top: 0; width: 312px; height: 192px; }
+  .geetest_canvas_fullbg { display: none; }
+  .geetest_slider { position: relative; width: 312px; height: 40px; margin-top: 10px; }
+  .geetest_slider_track { position: absolute; inset: 8px 0; background: #eef; border-radius: 12px; }
+  .geetest_slider_button { position: absolute; left: 0; top: 0; width: 40px; height: 40px; background: #39f;
+    border-radius: 50%; cursor: pointer; }
+  .geetest_item_wrap { position: relative; width: 306px; height: 306px; overflow: hidden; cursor: pointer; }
+  .geetest_item_img { width: 306px; display: block; }
+  .geetest_mark { position: absolute; width: 18px; height: 18px; margin: -9px; border-radius: 50%; background: #39f;
+    color: #fff; font: 11px/18px sans-serif; text-align: center; pointer-events: none; }
+  .geetest_commit { display: block; margin-top: 8px; background: #39f; color: #fff; text-align: center;
+    padding: 9px; border-radius: 3px; cursor: pointer; }
+  .geetest_tip_content { font-size: 14px; }
+</style></head>
+<body>
+<h1>GeeTest v3 fixture</h1>
+<div class="geetest_holder geetest_wind geetest_detect" id="holder">
+  <div class="geetest_radar_btn"><div class="geetest_radar_tip"><span class="geetest_radar_tip_content">点击按钮进行验证</span></div></div>
+  <div class="geetest_success_radar_tip"><span class="geetest_success_radar_tip_content">验证成功</span></div>
+</div>
+<div class="geetest_panel geetest_wind" id="panel"><div class="geetest_panel_box"><div class="geetest_widget" id="widget"></div></div></div>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const TYPE = q.get("type") || "slide";
+const MODE = q.get("mode") || "";
+const SCALE = 312 / 260;           // slide canvases: 260x160 drawn at 312x192 CSS px
+const PIECE_X0 = 4;                // piece's left edge inside the slice canvas
+const GAP_X = 172;                 // correct answer (the mocked model answer)
+const CLICKS = [[60, 70], [230, 110], [140, 260]];
+let attempts = 0;
+let round = 0;
+
+function log(entry) {
+  return fetch("/geetest/log", { method: "POST", body: JSON.stringify(Object.assign({ page: "v3", type: TYPE }, entry)) });
+}
+
+function success() {
+  document.getElementById("panel").classList.remove("geetest_show");
+  document.getElementById("holder").classList.add("geetest_radar_success");
+  document.title = "GEETEST OK";
+}
+
+document.getElementById("holder").addEventListener("click", () => {
+  if (document.getElementById("holder").classList.contains("geetest_radar_success")) return;
+  document.getElementById("panel").classList.add("geetest_show");
+  (TYPE === "slide" ? buildSlide : buildClick)();
+  log({ event: "open" });
+});
+
+// ---------------------------------------------------------------- slide
+function buildSlide() {
+  round += 1;
+  const w = document.getElementById("widget");
+  w.innerHTML = `<div class="geetest_wrap"><div class="geetest_window"><div class="geetest_slicebg geetest_absolute">
+    <canvas class="geetest_canvas_bg geetest_absolute" width="260" height="160"></canvas>
+    <canvas class="geetest_canvas_slice geetest_absolute" width="260" height="160"></canvas></div>
+    <canvas class="geetest_canvas_fullbg geetest_fade geetest_absolute" width="260" height="160"></canvas></div>
+    <div class="geetest_slider geetest_ready"><div class="geetest_slider_track"></div>
+    <div class="geetest_slider_button"></div></div></div>`;
+  const hue = round * 70;
+  const paint = (c, gap) => {
+    const g = c.getContext("2d");
+    const grad = g.createLinearGradient(0, 0, 260, 160);
+    grad.addColorStop(0, `hsl(${hue},60%,55%)`);
+    grad.addColorStop(1, `hsl(${hue + 120},60%,35%)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 260, 160);
+    for (let i = 0; i < 9; i++) { g.fillStyle = `hsl(${hue + i * 40},70%,60%)`; g.beginPath(); g.arc(20 + i * 28, 30 + (i * 37) % 110, 12, 0, 7); g.fill(); }
+    if (gap) { g.fillStyle = "rgba(0,0,0,.65)"; g.fillRect(GAP_X, 50, 50, 50); }
+  };
+  paint(w.querySelector(".geetest_canvas_bg"), true);
+  paint(w.querySelector(".geetest_canvas_fullbg"), false);
+  const slice = w.querySelector(".geetest_canvas_slice");
+  const sg = slice.getContext("2d");
+  sg.fillStyle = "#f5f5f5"; sg.fillRect(PIECE_X0, 50, 50, 50);
+  sg.strokeStyle = "#333"; sg.strokeRect(PIECE_X0 + 0.5, 50.5, 49, 49);
+  const btn = w.querySelector(".geetest_slider_button");
+  let drag = null;
+  btn.addEventListener("mousedown", (e) => {
+    drag = { x0: e.clientX, y0: e.clientY, t0: performance.now(), moves: [], dx: 0 };
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    drag.dx = Math.max(0, Math.min(272, e.clientX - drag.x0));
+    drag.moves.push([Math.round(performance.now() - drag.t0), e.clientX, e.clientY]);
+    btn.style.transform = `translateX(${drag.dx}px)`;
+    slice.style.left = `${drag.dx}px`;       // v3: the slice follows the button 1:1
+  });
+  document.addEventListener("mouseup", () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    attempts += 1;
+    const final = PIECE_X0 + d.dx / SCALE;
+    const ys = d.moves.map((m) => m[2]);
+    const wrongFirst = MODE === "wrongfirst" && attempts === 1;
+    const accepted = !wrongFirst && Math.abs(final - GAP_X) <= 3;
+    log({ event: "drop", attempt: attempts, final: Math.round(final * 10) / 10, accepted, moves: d.moves.length,
+      ms: Math.round(performance.now() - d.t0), yRange: Math.max(...ys) - Math.min(...ys),
+      backtrack: d.moves.some((m, i) => i > 0 && m[1] < d.moves[i - 1][1]) });
+    if (accepted) setTimeout(success, 300);
+    else setTimeout(buildSlide, 600);       // GeeTest shows a new puzzle after a miss
+  }, { once: false });
+}
+
+// ---------------------------------------------------------------- word click
+function buildClick() {
+  round += 1;
+  const w = document.getElementById("widget");
+  w.innerHTML = `<div class="geetest_wrap"><div class="geetest_head"><div class="geetest_tips">
+    <span class="geetest_tip_content">请在下图依次点击：天 地 人</span></div></div>
+    <div class="geetest_table_box"><div class="geetest_window"><div class="geetest_item geetest_big_item">
+    <div class="geetest_item_wrap"><img class="geetest_item_img" src="/geetest/img?name=v3click" alt=""></div></div></div></div>
+    <div class="geetest_panel_footer"><a class="geetest_commit"><div class="geetest_commit_tip">确定</div></a></div></div>`;
+  const wrap = w.querySelector(".geetest_item_wrap");
+  const img = w.querySelector(".geetest_item_img");
+  const clicks = [];
+  wrap.addEventListener("click", (e) => {
+    const r = img.getBoundingClientRect();
+    const k = img.naturalWidth / r.width;
+    const p = [(e.clientX - r.left) * k, (e.clientY - r.top) * k];
+    clicks.push(p);
+    const m = document.createElement("div");
+    m.className = "geetest_mark geetest_mark_show";
+    m.style.left = `${e.clientX - wrap.getBoundingClientRect().left}px`;
+    m.style.top = `${e.clientY - wrap.getBoundingClientRect().top}px`;
+    m.textContent = clicks.length;
+    wrap.appendChild(m);
+  });
+  w.querySelector(".geetest_commit").addEventListener("click", () => {
+    attempts += 1;
+    const accepted = clicks.length === CLICKS.length &&
+      clicks.every((p, i) => Math.abs(p[0] - CLICKS[i][0]) <= 5 && Math.abs(p[1] - CLICKS[i][1]) <= 5);
+    log({ event: "commit", attempt: attempts, clicks: clicks.map((p) => p.map((v) => Math.round(v))), accepted });
+    if (accepted) setTimeout(success, 300);
+    else setTimeout(buildClick, 600);
+  });
+}
+</script>
+</body></html>

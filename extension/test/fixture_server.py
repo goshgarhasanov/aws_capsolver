@@ -9,8 +9,10 @@ Local fixture server for the extension's end-to-end test. Never talks to the int
     /bls/submit                  BLS form target (logs the selected tile ids)
     /blspl/login?img=            BLS Poland-like login page with a text captcha
     /blspl/captcha.jpg?img=      the captcha image (every download is logged)
-    /mockapi/*                   CapSolver-compatible mock (ImageToTextTask) for when the
-                                 real service has no model for it
+    /mockapi/*                   CapSolver-compatible mock (ImageToTextTask, GeeTestClassification)
+                                 for when the real service has no model for it
+    /geetest/img?name=           generated GeeTest-like pictures (every download is logged)
+    /geetest/log                 the GeeTest fixture pages report drags / clicks / verdicts here
     /_log                        everything above that the test asserts on
 """
 
@@ -34,10 +36,94 @@ BLS_PL = Path("/home/gg/projects/BlsPolandBott_dev/temp")
 MOCK_TEXT_MIXED = "aB3dE"   # generic module: upper/lower case must reach the input unchanged
 MOCK_TEXT = "40719"
 
-LOG = {"verify": [], "bls_submit": [], "blspl_images": [], "mockapi": [], "blspl_submit": []}
+LOG = {"verify": [], "bls_submit": [], "blspl_images": [], "mockapi": [], "blspl_submit": [],
+       "geetest": [], "geetest_images": []}
+# mocked GeeTestClassification answers (the fixture pages accept exactly these)
+GEETEST_ANSWERS = {
+    "slide": {"x": 168},   # the piece image's left edge; its opaque part starts 4 px in -> gap at 172
+    "click": {"points": [[60, 70], [230, 110], [140, 260]]},
+    "nine": {"objects": [1, 5, 6]},
+    "gobang": {"move": [[0, 1], [2, 3]]},
+}
+GEETEST_IMAGES = {}
 SESSIONS = {}
 TILE_IDS = {}  # tile element id -> "real<i>" / "decoy"
 LOCK = threading.Lock()
+
+
+def png_size(b64):
+    """(width, height) from a base64 PNG header, or None."""
+    try:
+        head = base64.b64decode((b64 or "")[:64] + "=" * (-len((b64 or "")[:64]) % 4))
+    except ValueError:
+        return None
+    if head[:8] != b"\x89PNG\r\n\x1a\n" or len(head) < 24:
+        return None
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def geetest_image(name):
+    """Deterministic GeeTest-like PNGs (Pillow), built once."""
+    if name in GEETEST_IMAGES:
+        return GEETEST_IMAGES[name]
+    import io
+    from PIL import Image, ImageDraw
+    rnd = random.Random(name)
+
+    def scene(w, h):
+        img = Image.new("RGB", (w, h))
+        d = ImageDraw.Draw(img)
+        for y in range(h):
+            d.line([(0, y), (w, y)], fill=(40 + y * 120 // h, 90 + rnd.randrange(30), 160 - y * 60 // h))
+        for _ in range(12):
+            x, y, r = rnd.randrange(w), rnd.randrange(h), rnd.randrange(6, 30)
+            d.ellipse([x - r, y - r, x + r, y + r], fill=tuple(rnd.randrange(256) for _ in range(3)))
+        return img, d
+
+    if name == "v4bg":
+        img, d = scene(320, 160)
+        d.rectangle([172, 57, 172 + 55, 57 + 55], fill=(20, 20, 20))       # the gap
+    elif name == "v4piece":
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(img).rectangle([4, 4, 59, 59], fill=(240, 240, 240, 255))
+    elif name == "v3click":
+        img, d = scene(344, 384)
+        d.rectangle([0, 344, 344, 384], fill=(250, 250, 250))             # the hint strip
+    elif name == "v4click":
+        img, _ = scene(600, 400)
+    elif name.startswith("icon") or name == "target":
+        img = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+        ImageDraw.Draw(img).polygon([(15, 2), (28, 28), (2, 28)], fill=(rnd.randrange(256), 40, 90, 255))
+    elif name.startswith("cell"):
+        img, _ = scene(100, 100)
+    elif name in ("stone_b", "stone_w"):
+        img = Image.new("RGBA", (60, 60), (0, 0, 0, 0))
+        ImageDraw.Draw(img).ellipse([6, 6, 54, 54], fill=(20, 20, 20, 255) if name == "stone_b" else (235, 235, 235, 255))
+    else:
+        return None
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    GEETEST_IMAGES[name] = buf.getvalue()
+    return GEETEST_IMAGES[name]
+
+
+def geetest_mock_answer(task):
+    """A mocked GeeTestClassification reply (logged for the test)."""
+    question = str(task.get("question") or "")
+    family = question.split(":")[1] if question.count(":") >= 1 else ""
+    LOG["mockapi"].append({
+        "type": task.get("type"), "question": question,
+        "images": len(task.get("images") or []),
+        "size": png_size((task.get("images") or [""])[0]),
+        "piece": png_size(task.get("piece")) if task.get("piece") else None,
+        "fullBackground": bool(task.get("fullBackground")),
+        "hints": [h if len(h) < 16 else png_size(h) for h in task.get("hints") or []],
+        "targetImage": png_size(task.get("targetImage")) if task.get("targetImage") else None,
+    })
+    key = "click" if family in ("icon", "word", "space") else family
+    if key not in GEETEST_ANSWERS:
+        return {"errorId": 1, "errorCode": "ERROR_TASK_NOT_SUPPORTED", "errorDescription": "mock: unknown family"}
+    return {"errorId": 0, "status": "ready", "taskId": "mock-gt", "solution": GEETEST_ANSWERS[key]}
 
 
 def load_bls_grids():
@@ -231,13 +317,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # quiet
         pass
 
-    def _send(self, code, body, ctype="text/html; charset=utf-8", extra=None):
+    def _send(self, code, body, ctype="text/html; charset=utf-8", extra=None, cache="no-store"):
         if isinstance(body, str):
             body = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -299,6 +385,13 @@ class Handler(BaseHTTPRequestHandler):
                 ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript"}.get(
                     f.suffix.lstrip("."), "application/octet-stream")
                 return self._send(200, f.read_bytes(), ctype)
+        if path == "/geetest/img":
+            data = geetest_image(q.get("name", ""))
+            if data is None:
+                return self._send(404, "no such picture", "text/plain")
+            with LOCK:
+                LOG["geetest_images"].append(q.get("name", ""))
+            return self._send(200, data, "image/png", cache="public, max-age=600")
         if path == "/mockapi/health":
             return self._json({"ok": True, "version": "mock"})
         return self._send(404, "not found", "text/plain")
@@ -335,11 +428,18 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 LOG["blspl_submit"].append(form.get("captcha_code", ""))
             return self._send(200, "<h1>submitted</h1>")
+        if path == "/geetest/log":
+            with LOCK:
+                LOG["geetest"].append(json.loads(raw or b"{}"))
+            return self._json({"ok": True})
         if path.startswith("/mockapi/"):
             body = json.loads(raw or b"{}")
             if path.endswith("/getBalance"):
                 return self._json({"errorId": 0, "balance": 25000})
             task = body.get("task") or {}
+            if task.get("type") == "GeeTestClassification":
+                with LOCK:
+                    return self._json(geetest_mock_answer(task))
             with LOCK:
                 LOG["mockapi"].append({"type": task.get("type"), "module": task.get("module"),
                                        "case": task.get("case"),

@@ -103,6 +103,10 @@ const KIND_ICONS = {
   // general text captcha: "Aa" on a picture frame
   text: '<rect x="1.5" y="3.5" width="17" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
     '<text x="10" y="13.6" class="glyph wide">Aa</text>',
+  // GeeTest: a picture with a puzzle-piece gap above a slider knob
+  geetest: '<rect x="1.5" y="2" width="17" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+    '<path d="M11 5h2.2a1.3 1.3 0 0 1 2.6 0H16v4.5h-5z" class="pick"/>' +
+    '<rect x="1.5" y="15" width="17" height="2" rx="1" opacity=".45"/><rect x="4" y="13.6" width="5" height="4.8" rx="1.4"/>',
 };
 
 function kindIcon(kind) {
