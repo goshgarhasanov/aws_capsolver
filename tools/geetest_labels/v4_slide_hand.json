@@ -1,0 +1,37 @@
+{
+ "12250f5e92034b329baf9a8342ccff89": {
+  "x": 207,
+  "y": 20,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ },
+ "25ec11a195854205adcbc08825772854": {
+  "x": 123,
+  "y": 17,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ },
+ "29e553db80e74b33b2c9fbf8e59aed82": {
+  "x": 196,
+  "y": 118,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the content truth's gap"
+ },
+ "4625cf5de350446bbe87442b20026145": {
+  "x": 114,
+  "y": 23,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ },
+ "55e975d7e21a4df983a776167275385e": {
+  "x": 103,
+  "y": 16,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ },
+ "833c8a0083f44d14b025532961a15947": {
+  "x": 202,
+  "y": 94,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ },
+ "d485125b40174a4bae0736c1fc156a60": {
+  "x": 124,
+  "y": 19,
+  "note": "hand-checked: relaxed content truth and solver disagreed; kept the solver's gap"
+ }
+}

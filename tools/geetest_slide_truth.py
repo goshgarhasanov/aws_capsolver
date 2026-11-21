@@ -22,6 +22,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 MIN_NCC = float(os.environ.get("TRUTH_MIN_NCC", "0.7"))    # minimum high-pass NCC of the piece on the clean picture
+OUT_NAME = os.environ.get("TRUTH_FILE", "truth.json")
 MIN_GROUP = int(os.environ.get("TRUTH_MIN_GROUP", "3"))
 MIN_MARGIN = float(os.environ.get("TRUTH_MIN_MARGIN", "0.1")) # over the best match elsewhere
 DATA = ROOT / "data" / "geetest" / "v4_slide"
@@ -99,7 +100,7 @@ def main() -> int:
                 skipped += 1
                 continue
             x, y, score = r
-            (dirs[i] / "truth.json").write_text(json.dumps(
+            (dirs[i] / OUT_NAME).write_text(json.dumps(
                 {"x": x, "y": y, "score": score, "group_size": len(uniq), "method": "pool-median content"}))
             done += 1
     print(f"truth for {done} samples, {skipped} without a big enough picture group")

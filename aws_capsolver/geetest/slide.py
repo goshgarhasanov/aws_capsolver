@@ -229,6 +229,19 @@ def _content_scores(bg: np.ndarray, bg_hp: np.ndarray, tmpl: np.ndarray, tmpl_hp
     return v, lx + xx, ly + yy
 
 
+def _content_map(bg: np.ndarray, bg_hp: np.ndarray, tmpl: np.ndarray, tmpl_hp: np.ndarray,
+                 core3: np.ndarray) -> np.ndarray:
+    """Content similarity (mean of plain and high-pass masked NCC) at every gap position."""
+    import cv2
+
+    total = None
+    for img, t in ((bg, tmpl), (bg_hp, tmpl_hp)):
+        sc = cv2.matchTemplate(np.ascontiguousarray(img, dtype=np.float32), t, cv2.TM_CCOEFF_NORMED, mask=core3)
+        sc = np.clip(np.nan_to_num(sc, nan=-1.0, posinf=-1.0, neginf=-1.0), -1.0, 1.0)
+        total = sc if total is None else total + sc
+    return total / 2.0
+
+
 def _match(bg: np.ndarray, piece_rgba: np.ndarray, y: int | None) -> SlideResult:
     import cv2
 
@@ -253,6 +266,14 @@ def _match(bg: np.ndarray, piece_rgba: np.ndarray, y: int | None) -> SlideResult
     # pick the one whose content is the piece's own picture content.
     core3 = np.repeat(core[:, :, None], 3, 2).astype(np.float32)
     bg_hp, tmpl_hp = _highpass(bg), np.ascontiguousarray(_highpass(tmpl))
+    # A gap in a dark area has a weak outline: add the best content matches as candidates.
+    content = _content_map(bg, bg_hp, tmpl, tmpl_hp, core3)
+    content = _restrict_rows(content, None if y is None else y + oy)
+    seen = {(yy, xx) for yy, xx, _ in cands}
+    for gy, gx, _v in _peaks(content, 4, max(6, min(h, w) // 4)):
+        p = (gy - _PAD, gx - _PAD)
+        if 0 <= p[0] < s.shape[0] and 0 <= p[1] < s.shape[1] and p not in seen:
+            cands.append((p[0], p[1], float(max(s[p], 0.0))))
     best = None
     for yy, xx, sc in cands:
         c, cx, cy = _content_scores(bg, bg_hp, tmpl, tmpl_hp, core3, xx + _PAD, yy + _PAD, 3)
