@@ -9,9 +9,9 @@ Pipeline
 3. Trained heads (``weights/recaptcha_head.pt``) turn embeddings into per-class
    probabilities:
      * ``tile``: multi-label MLP for 3x3 tiles and single tiles,
-     * ``cell``: MLP for 4x4 cells over [cell, whole photo, mean of the 4 neighbours]
-       followed by a small neighbour-context stage (a cell is positive when ANY part of
-       the object overlaps it, which depends on the neighbours).
+     * 4x4 grids: the dense MIL head (``weights/recaptcha_dense.pt``, see dense.py) when
+       it knows the class; otherwise the legacy crop ``cell`` head if the head file has
+       one; otherwise the tile head on the 16 cells.
    Each class has its own threshold tuned on validation data.
 4. Classes the head does not know (or every class, when the weight file is missing) are
    scored zero-shot: CLIP text prompts of the target contrasted with the other reCAPTCHA
