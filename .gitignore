@@ -17,3 +17,4 @@ keys.json
 !weights/bls_poland_ocr.pt
 !weights/general_ocr*
 !weights/geetest_*.pt
+!weights/recaptcha_*.pt
