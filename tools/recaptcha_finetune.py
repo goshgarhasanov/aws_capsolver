@@ -28,7 +28,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +38,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from aws_capsolver.recaptcha import features  # noqa: E402
 from aws_capsolver.recaptcha.backbone import TAIL_PATH, get_encoder  # noqa: E402
-from recaptcha_embed import DATA, out_path  # noqa: E402
+from recaptcha_embed import DATA, _prefetch, out_path  # noqa: E402
 from recaptcha_train import BX_MAP, DANNY_MAP, TILE_CLASSES, answers_set, may_cooccur  # noqa: E402
 
 BASE = "ViT-B-32:laion2b_s34b_b79k@224"
@@ -63,8 +62,7 @@ def crops_for(what, split):
         base = DATA / "danny" / "dataset_cls_full_57k" / split
         classes = sorted(os.listdir(DATA / "danny" / "dataset_cls_full_57k" / "train"))
         files = [f for c in classes if (base / c).is_dir() for f in sorted((base / c).iterdir())]
-        with ThreadPoolExecutor(6) as ex:
-            yield from ex.map(_open, files)
+        yield from _prefetch(_open, files)
         return
     d = DATA / "bx" / "data" / "3x3" / split
     rows = [json.loads(line) for line in open(d / "metadata.jsonl")]
@@ -74,13 +72,12 @@ def crops_for(what, split):
     def load(r):
         return features.model_crops(_open(d / r["file_name"]), 3)
 
-    with ThreadPoolExecutor(6) as ex:
-        for crops in ex.map(load, rows):
-            for t in crops:
-                h = hashlib.md5(t.tobytes()).digest()
-                if h not in seen:
-                    seen.add(h)
-                    yield t
+    for crops in _prefetch(load, rows):
+        for t in crops:
+            h = hashlib.md5(t.tobytes()).digest()
+            if h not in seen:
+                seen.add(h)
+                yield t
 
 
 def stem(visual, x, K):
@@ -219,6 +216,8 @@ def cmd_train(a):
         parts.append((T, Y, M, keep))
         print(f"train {spec}: {len(keep)} rows", flush=True)
     index = [(pi, int(i)) for pi, (_, _, _, keep) in enumerate(parts) for i in keep]
+    if a.limit:
+        index = [index[i] for i in np.random.default_rng(2).choice(len(index), a.limit, replace=False)]
     tail = Tail(enc.visual, a.K, len(TILE_CLASSES))
     opt = torch.optim.AdamW([{"params": tail.params(), "lr": a.lr},
                              {"params": tail.head.parameters(), "lr": a.head_lr}], weight_decay=0.05)
@@ -254,10 +253,11 @@ def cmd_train(a):
                       flush=True)
         em = evaluate(tail, Tv, bv, a)
         print(f"epoch {ep}: val exact {em}", flush=True)
-        TAIL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"base": BASE, "K": a.K, "state": tail.state(), "trained_on":
-                    f"bx3 train + Danny; {a.epochs} epochs; {time.strftime('%Y-%m-%d')}"}, TAIL_PATH)
-        print("saved", TAIL_PATH, flush=True)
+        Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"base": BASE, "K": a.K, "state": tail.state(), "head_W": tail.head.weight.detach(),
+                    "head_b": tail.head.bias.detach(), "scale": a.scale, "trained_on":
+                    f"{' + '.join(a.train)}; {ep + 1} epochs; {time.strftime('%Y-%m-%d')}"}, a.out)
+        print("saved", a.out, flush=True)
 
 
 def tail_embed(tail, T, scale=1.0, batch=256):
@@ -337,6 +337,8 @@ def main():
     t.add_argument("--head-lr", type=float, default=1e-3)
     t.add_argument("--scale", type=float, default=10.0)
     t.add_argument("--danny-cap", type=int, default=8000)
+    t.add_argument("--limit", type=int, default=0, help="train on a random subset (smoke tests)")
+    t.add_argument("--out", default=str(TAIL_PATH))
     e = sub.add_parser("embed")
     e.add_argument("--force", action="store_true")
     for p in (c, t, e):

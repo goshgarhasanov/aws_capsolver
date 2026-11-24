@@ -69,9 +69,18 @@ def embed_pils(enc, pils_iter, total: int, label: str) -> np.ndarray:
     return np.concatenate(out) if out else np.zeros((0, 0), np.float16)
 
 
-def _prefetch(fn, items, workers=6):
+def _prefetch(fn, items, workers=6, window=256):
+    """Ordered parallel map with a bounded look-ahead (Executor.map would load everything)."""
+    from collections import deque
+
     with ThreadPoolExecutor(workers) as ex:
-        yield from ex.map(fn, items)
+        q = deque()
+        for it in items:
+            q.append(ex.submit(fn, it))
+            if len(q) >= window:
+                yield q.popleft().result()
+        while q:
+            yield q.popleft().result()
 
 
 def run_danny(enc, split: str):
