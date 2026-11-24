@@ -5,12 +5,14 @@
 
   // "text" covers every image text captcha, the BLS Poland login included (it used to be a
   // separate "blsText" solver; its switch is merged into "text" by the v3 migration)
-  const KINDS = ["awsGrid", "awsToken", "blsGrid", "text", "geetest"];
+  const KINDS = ["awsGrid", "awsToken", "blsGrid", "text", "geetest", "recaptcha"];
   const LANGS = ["auto", "en", "tr", "az", "ru"];
 
   // v2: the general text solver is on by default (it used to be off, so captchas on most
   // sites were never detected); stored v1 settings are migrated once.
-  const SETTINGS_VERSION = 3;
+  // v3: one text switch. v4: the reCAPTCHA v2 solver (on by default, like every new solver;
+  // a missing switch takes its default, so v4 needs no data change)
+  const SETTINGS_VERSION = 4;
 
   const DEFAULTS = {
     enabled: true,
@@ -19,7 +21,7 @@
     autoSolve: true,
     delayMs: 800,          // pause before solving a freshly detected captcha
     retries: 3,            // rounds per captcha (new puzzle after a wrong answer)
-    solvers: { awsGrid: true, awsToken: true, blsGrid: true, text: true, geetest: true },
+    solvers: { awsGrid: true, awsToken: true, blsGrid: true, text: true, geetest: true, recaptcha: true },
     blsGridSubmit: true,   // press Verify after picking BLS tiles (never with an empty password)
     submitAfterFill: false, // submit the form after filling a text captcha (auto-solve only)
     pageBadge: true,       // small status pill next to the captcha

@@ -3,7 +3,7 @@
     "message": "Captchosa"
   },
   "extDescription": {
-    "message": "AWS WAF, GeeTest, BLS ve resim captcha'larını kendi Captchosa sunucunuzla çözer."
+    "message": "AWS WAF, GeeTest, reCAPTCHA v2 resim, BLS ve metin captcha'larını kendi Captchosa sunucunuzla çözer."
   },
   "on": {
     "message": "Açık"
@@ -35,6 +35,9 @@
   "kind_geetest": {
     "message": "GeeTest"
   },
+  "kind_recaptcha": {
+    "message": "reCAPTCHA v2"
+  },
   "desc_awsGrid": {
     "message": "AWS WAF penceresindeki resim ızgarası"
   },
@@ -52,6 +55,9 @@
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: kaydırma, simge/kelime tıklama, dokuzlu ızgara, gobang"
+  },
+  "desc_recaptcha": {
+    "message": "Resim testi: 3×3, 4×4 ve yeni kareler (“… olan tüm resimleri seçin”)"
   },
   "closeBadge": {
     "message": "Gizle"

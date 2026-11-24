@@ -10,6 +10,7 @@ Only depends on ``requests``. Copy this single file into your project.
     print(solution["cookie"])          # value of the aws-waf-token cookie
 
     print(client.classify("aws:grid:bed", [b64_tile_0, ..., b64_tile_8]))   # {"objects": [...]}
+    print(client.classify_recaptcha_v2(grid_png, "/m/0k4j"))  # {"type": "multi", "objects": [...], "size": 3}
 
 Every API failure is raised as ``CapsolverError`` with the CapSolver ``errorCode``.
 Transport failures (connection refused, HTTP 5xx, invalid JSON) are raised as
@@ -26,7 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence, TypedDict, Union
 import requests
 
 __all__ = ["AwsCapsolverClient", "CapsolverError", "WafSolution", "GridSolution",
-           "ToycarSolution", "ERROR_CLIENT_TIMEOUT", "ERROR_CLIENT_TRANSPORT"]
+           "ToycarSolution", "RecaptchaV2Solution", "ERROR_CLIENT_TIMEOUT", "ERROR_CLIENT_TRANSPORT"]
 
 ERROR_CLIENT_TIMEOUT = "ERROR_CLIENT_TIMEOUT"
 ERROR_CLIENT_TRANSPORT = "ERROR_CLIENT_TRANSPORT"
@@ -44,6 +45,13 @@ class GridSolution(TypedDict):
 
 class ToycarSolution(TypedDict):
     box: List[int]         # [x, y]
+
+
+class RecaptchaV2Solution(TypedDict, total=False):
+    type: str              # "multi" (3x3 / 4x4 grid) or "single" (one 1x1 tile)
+    objects: List[int]     # multi: 0-based, row-major cells to click (may be empty = skip)
+    hasObject: bool        # single: the tile shows the object
+    size: int              # 3, 4 or 1
 
 
 class CapsolverError(Exception):
@@ -176,6 +184,25 @@ class AwsCapsolverClient:
             return created.get("solution") or {}
         # not expected from this server, but CapSolver-style async replies are handled too
         return self.get_task_result(created["taskId"])
+
+
+    def classify_recaptcha_v2(self, image: ImageInput, question: str,
+                              size: Optional[int] = None) -> RecaptchaV2Solution:
+        """ReCaptchaV2Classification (synchronous).
+
+        image: the challenge picture (the whole 3x3 / 4x4 grid, or one new 1x1 tile), base64
+               (data: URL accepted) or raw bytes.
+        question: a Freebase id such as "/m/0k4j" or the object name in any language ("cars").
+        size: 3, 4 or 1 when known (otherwise the model infers it from the picture).
+        """
+        task: Dict[str, Any] = {"type": "ReCaptchaV2Classification", "image": _b64(image),
+                                "question": question}
+        if size is not None:
+            task["size"] = size
+        created = self.create_task(task)
+        if created.get("status") == "ready":
+            return created.get("solution") or {}  # type: ignore[return-value]
+        return self.get_task_result(created["taskId"])  # type: ignore[return-value]
 
 
 if __name__ == "__main__":  # tiny smoke test: python aws_capsolver_client.py URL KEY

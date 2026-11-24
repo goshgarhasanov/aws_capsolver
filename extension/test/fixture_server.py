@@ -9,10 +9,14 @@ Local fixture server for the extension's end-to-end test. Never talks to the int
     /bls/submit                  BLS form target (logs the selected tile ids)
     /blspl/login?img=            BLS Poland-like login page with a text captcha
     /blspl/captcha.jpg?img=      the captcha image (every download is logged)
-    /mockapi/*                   CapSolver-compatible mock (ImageToTextTask, GeeTestClassification)
+    /mockapi/*                   CapSolver-compatible mock (ImageToTextTask, GeeTestClassification,
+                                 ReCaptchaV2Classification)
                                  for when the real service has no model for it
     /geetest/img?name=           generated GeeTest-like pictures (every download is logged)
     /geetest/log                 the GeeTest fixture pages report drags / clicks / verdicts here
+    /recaptcha/payload?id=       generated reCAPTCHA-like pictures; a colour code in the corner
+                                 tells the mock which picture it got
+    /recaptcha/log               the reCAPTCHA fixture frames report clicks / reloads / verifies here
     /_log                        everything above that the test asserts on
 """
 
@@ -37,7 +41,7 @@ MOCK_TEXT_MIXED = "aB3dE"   # generic module: upper/lower case must reach the in
 MOCK_TEXT = "40719"
 
 LOG = {"verify": [], "bls_submit": [], "blspl_images": [], "mockapi": [], "blspl_submit": [],
-       "geetest": [], "geetest_images": []}
+       "geetest": [], "geetest_images": [], "recaptcha": [], "recaptcha_images": []}
 # mocked GeeTestClassification answers (the fixture pages accept exactly these)
 GEETEST_ANSWERS = {
     "slide": {"x": 168},   # the piece image's left edge; its opaque part starts 4 px in -> gap at 172
@@ -130,6 +134,80 @@ def geetest_mock_answer(task):
     if key == "slide" and not (isinstance(task.get("y"), int) and any(abs(task["y"] - row) <= 1 for row in (50, 57))):
         solution = {"x": 56}  # without the right row the decoy gap wins (like the real v4 model)
     return {"errorId": 0, "status": "ready", "taskId": "mock-gt", "solution": solution}
+
+
+# reCAPTCHA pictures: id -> (side px, mocked ReCaptchaV2Classification answer)
+RECAPTCHA_PICTURES = {
+    "s33_cars": (300, {"type": "multi", "objects": [0, 4, 8], "size": 3}),
+    "s33_bus": (300, {"type": "multi", "objects": [1, 2], "size": 3}),
+    "s33_zebra": (300, "unsupported"),
+    "g44_moto": (450, {"type": "multi", "objects": [0, 1, 4, 5], "size": 4}),
+    "d33_lights": (300, {"type": "multi", "objects": [1, 3], "size": 3}),
+    "t_yes_a": (100, {"type": "single", "hasObject": True, "size": 1}),
+    "t_no_b": (100, {"type": "single", "hasObject": False, "size": 1}),
+    "t_no_c": (100, {"type": "single", "hasObject": False, "size": 1}),
+}
+RECAPTCHA_IMAGES = {}
+
+
+def recaptcha_code(name):
+    """The corner colour that identifies a picture (t_no_x* tiles share one code)."""
+    names = sorted(RECAPTCHA_PICTURES)
+    i = names.index(name) if name in names else len(names)
+    return (20 + 23 * i, 230 - 17 * i, 60 + 11 * i)
+
+
+def recaptcha_image(name):
+    if name in RECAPTCHA_IMAGES:
+        return RECAPTCHA_IMAGES[name]
+    if name in RECAPTCHA_PICTURES:
+        side = RECAPTCHA_PICTURES[name][0]
+    elif name.startswith("t_no_x"):
+        side = 100
+    else:
+        return None
+    import io
+    from PIL import Image, ImageDraw
+    rnd = random.Random(name)
+    img = Image.new("RGB", (side, side), (rnd.randrange(60, 200), rnd.randrange(60, 200), rnd.randrange(60, 200)))
+    d = ImageDraw.Draw(img)
+    for _ in range(side // 10):
+        x, y, r = rnd.randrange(side), rnd.randrange(side), rnd.randrange(4, 20)
+        d.ellipse([x - r, y - r, x + r, y + r], fill=tuple(rnd.randrange(256) for _ in range(3)))
+    d.rectangle([0, 0, 7, 7], fill=recaptcha_code(name))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    RECAPTCHA_IMAGES[name] = buf.getvalue()
+    return RECAPTCHA_IMAGES[name]
+
+
+def recaptcha_mock_answer(task):
+    """A mocked ReCaptchaV2Classification reply, chosen by the picture's colour code."""
+    import io
+    from PIL import Image
+    name, dims = None, None
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(task.get("image") or ""))) as img:
+            dims = list(img.size)
+            px = img.convert("RGB").getpixel((3, 3))
+        for candidate in list(RECAPTCHA_PICTURES) + ["t_no_x"]:
+            if all(abs(a - b) <= 3 for a, b in zip(px, recaptcha_code(candidate))):
+                name = candidate
+                break
+    except Exception:  # not a picture
+        pass
+    LOG["mockapi"].append({"type": task.get("type"), "question": task.get("question"), "size": task.get("size"),
+                           "picture": name, "dims": dims})
+    if name == "t_no_x":
+        answer = {"type": "single", "hasObject": False, "size": 1}
+    else:
+        answer = RECAPTCHA_PICTURES.get(name, (0, None))[1]
+    if answer is None:
+        return {"errorId": 1, "errorCode": "ERROR_INVALID_TASK_DATA", "errorDescription": "mock: unknown picture"}
+    if answer == "unsupported":
+        return {"errorId": 1, "errorCode": "ERROR_CAPTCHA_UNSOLVABLE",
+                "errorDescription": f"unsupported question: {task.get('question')}", "status": "failed"}
+    return {"errorId": 0, "status": "ready", "taskId": "mock-rc", "solution": answer}
 
 
 def load_bls_grids():
@@ -398,6 +476,13 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 LOG["geetest_images"].append(q.get("name", ""))
             return self._send(200, data, "image/png", cache="public, max-age=600")
+        if path == "/recaptcha/payload":
+            data = recaptcha_image(q.get("id", ""))
+            if data is None:
+                return self._send(404, "no such picture", "text/plain")
+            with LOCK:
+                LOG["recaptcha_images"].append(q.get("id", ""))
+            return self._send(200, data, "image/png", cache="private, max-age=600")
         if path == "/mockapi/health":
             return self._json({"ok": True, "version": "mock"})
         return self._send(404, "not found", "text/plain")
@@ -438,11 +523,18 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 LOG["geetest"].append(json.loads(raw or b"{}"))
             return self._json({"ok": True})
+        if path == "/recaptcha/log":
+            with LOCK:
+                LOG["recaptcha"].append(json.loads(raw or b"{}"))
+            return self._json({"ok": True})
         if path.startswith("/mockapi/"):
             body = json.loads(raw or b"{}")
             if path.endswith("/getBalance"):
                 return self._json({"errorId": 0, "balance": 25000})
             task = body.get("task") or {}
+            if task.get("type") == "ReCaptchaV2Classification":
+                with LOCK:
+                    return self._json(recaptcha_mock_answer(task))
             if task.get("type") == "GeeTestClassification":
                 with LOCK:
                     return self._json(geetest_mock_answer(task))

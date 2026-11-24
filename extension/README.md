@@ -24,6 +24,7 @@ In manual mode a branded badge with a **Solve** button sits next to the captcha:
 | BLS grid | `.box-label` + `img.captcha-img` (BLS Spain etc.) | `BlsClassification` (`bls:grid:NNN`, 9 tiles in page order) |
 | BLS Poland text | `img[src*=captcha]` + `input[name=captcha_code]` | `ImageToTextTask`, module `bls_poland` |
 | GeeTest | GeeTest v3 popup (`.geetest_canvas_bg` + `.geetest_slider_button`, `.geetest_item_img` + `.geetest_commit`) and v4 box (`.geetest_bg`, `.geetest_btn`, `.geetest_item`, `.geetest_submit`, hashed class suffixes too) | `GeeTestClassification` (`geetest:slide`, `geetest:icon`, `geetest:word`, `geetest:space`, `geetest:nine[:<word>]`, `geetest:gobang`) |
+| reCAPTCHA v2 | image challenge in the `…/recaptcha/(api2\|enterprise)/bframe` iframe (www.google.com, www.recaptcha.net): `#rc-imageselect`, `table.rc-imageselect-table-33` / `-44`; the checkbox in `…/anchor` | `ReCaptchaV2Classification` (one picture + the object name from the instruction, `size` 3 / 4 / 1) |
 | General text (on by default) | any picture (`img`, `canvas`, `input[type=image]`, captcha background image; also in open shadow roots) paired with a nearby captcha-like text input | `ImageToTextTask`, module `common` |
 
 How each one works:
@@ -52,6 +53,20 @@ How each one works:
   wrong round (up to *Retries*); a success class or the widget closing counts as solved.
   Token-producing GeeTest solving (gt/challenge → validate) is not done: the answer always goes
   through the real widget.
+- **reCAPTCHA v2** (`content/recaptcha.js`) – runs only inside reCAPTCHA's own frames. With
+  *Auto-solve* the "I'm not a robot" checkbox is clicked once (once more after it expired). In the
+  challenge frame the object comes from the instruction (`.rc-imageselect-desc(-no-canonical)
+  strong`, any language), the payload picture (`img.rc-image-tile-33` / `-44`, one picture for the
+  whole grid) is read from the page - it is same-origin inside the frame, so no extra permission
+  and no new request - and sent as one `ReCaptchaV2Classification`. The returned cells are clicked
+  with paced pointer clicks; in a dynamic 3x3 every replaced tile (`img.rc-image-tile-11`) is
+  classified on its own (`size: 1`) and clicked while it still shows the object, then Verify is
+  pressed. "Please try again" / a new picture after Verify is a wrong round; an unknown object
+  (`unsupported question`) or no answer presses reload; a picture that stays with an error or
+  without any reaction is reloaded; at most 5 failed rounds and 12 pictures per challenge. Success
+  is the checkbox turning ticked (the checkbox frame tells the challenge frame through the service
+  worker; a hidden challenge frame cannot see it closing itself). No token is produced or injected
+  and nothing tries to hide automation from Google: the visible challenge is solved like a user.
 - **Text captchas** – the general solver pairs a picture with a text input. An input counts when
   its name/id/placeholder/aria-label, its `<label>` or the text around it talks about a captcha /
   security / verification code (English, Turkish, Azerbaijani, Russian wording); a picture counts
@@ -81,6 +96,8 @@ Settings apply live; no page reload is needed.
   requested at runtime (optional host permission) for exactly the URL you enter.
 - All network calls go from the service worker to the configured service URL (`/createTask`,
   `/getTaskResult`, `/getBalance`, `/health`), each with a timeout. Nothing else is contacted.
+- reCAPTCHA needs no extra permission: the content scripts already run in every http(s) frame
+  (`all_frames`), and inside Google's challenge frame the picture is same-origin.
 - No remote code, no `eval`; the page scripts run on all http(s) pages because captchas can appear
   anywhere, and stay passive until a known captcha shows up.
 - Errors are typed (`NETWORK_ERROR`, `TIMEOUT`, `PERMISSION_MISSING`, `NOT_CONFIGURED`, the
@@ -107,7 +124,10 @@ The fixtures (`test/fixtures/`, `test/fixture_server.py`) imitate the AWS widget
 `bls_capsolver/data/real` with hidden, covered and off-screen decoys), the BLS Poland login and
 GeeTest v3 (slide with a rejected first round, word click) and v4 (slide, icon, nine-grid, gobang)
 against a mocked `GeeTestClassification`; the GeeTest pages check the drop position / click order
-themselves and log the drag (moves, duration, vertical range, overshoot).
+themselves and log the drag (moves, duration, vertical range, overshoot). The reCAPTCHA fixture
+(`recaptcha.html` hosting cross-origin `recaptcha_anchor.html` + `recaptcha_bframe.html`) covers a
+static 3x3, "Please try again", an unsupported object (reload), 4x4 and a dynamic 3x3 against a
+mocked `ReCaptchaV2Classification` (`--only recaptcha` runs just that group).
 No third-party site is visited.
 
 ## Known limits
@@ -122,5 +142,9 @@ No third-party site is visited.
   GeeTest also scores the drag itself, and synthetic (`isTrusted === false`) events may be
   rejected by its risk engine even when the position is right. The v3 "match" and v4 "match" /
   "ai" types are not supported.
+- reCAPTCHA's DOM is reproduced from the live widget in the local fixtures; Google may change
+  class names. Its risk engine decides how many pictures it shows (or whether it blocks with
+  "Try again later"); that is not worked around. The `rc-imageselect-table-42` layout and the
+  "select around the object" variant without a 3x3 / 4x4 table are reloaded, not solved.
 - The AWS widget's real DOM may change; detection looks for any group of N similar cells inside
   the widget plus a Confirm/Verify button, with a single-canvas coordinate fallback.

@@ -3,7 +3,7 @@
     "message": "Captchosa"
   },
   "extDescription": {
-    "message": "Решает капчи AWS WAF, GeeTest, BLS и картинки через ваш собственный сервис Captchosa."
+    "message": "Решает капчи AWS WAF, GeeTest, reCAPTCHA v2 (картинки), BLS и текстовые через ваш собственный сервис Captchosa."
   },
   "on": {
     "message": "Вкл."
@@ -35,6 +35,9 @@
   "kind_geetest": {
     "message": "GeeTest"
   },
+  "kind_recaptcha": {
+    "message": "reCAPTCHA v2"
+  },
   "desc_awsGrid": {
     "message": "Сетка картинок в виджете AWS WAF"
   },
@@ -52,6 +55,9 @@
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: слайдер, клик по иконкам/словам, сетка 3×3, гобанг"
+  },
+  "desc_recaptcha": {
+    "message": "Задание с картинками: 3×3, 4×4 и новые клетки («Выберите все изображения, где есть …»)"
   },
   "closeBadge": {
     "message": "Скрыть"

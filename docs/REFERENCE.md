@@ -1,6 +1,6 @@
 # Captchosa - service reference (package `aws_capsolver`)
 
-A self-hosted AWS WAF, GeeTest, BLS and text captcha solving service that speaks the CapSolver API. A client that already
+A self-hosted AWS WAF, GeeTest, reCAPTCHA v2 image, BLS and text captcha solving service that speaks the CapSolver API. A client that already
 talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 
 - `AntiAwsWafTask` / `AntiAwsWafTaskProxyLess`: solve a site's AWS WAF (PoW challenge,
@@ -10,6 +10,8 @@ talks to CapSolver only needs a new `baseUrl` and `clientKey`.
 - `ImageToTextTask`: text captchas (BLS Poland model, general model, ddddocr fallback).
 - `GeeTestClassification`: one already-fetched GeeTest v3/v4 picture (slide gap, icon / word /
   space click points, nine-grid cells, gobang move). Token-producing `GeeTestTask` is out of scope.
+- `ReCaptchaV2Classification`: one already-fetched reCAPTCHA v2 challenge picture (3x3 / 4x4
+  grid or one replaced 1x1 tile) -> the cells to click. Token-producing `ReCaptchaV2Task` is out of scope.
 - `getBalance`, `getTaskResult`, `/health`.
 
 Contents: [Layout](#layout) - [Quick start](#quick-start) - [API reference](#api-reference) -
@@ -317,6 +319,49 @@ Out of scope: **token-producing GeeTest tasks** (`GeeTestTask` with `gt` / `chal
 need GeeTest's `w` parameter encryption, which this project deliberately does not
 reverse-engineer. The answer is always applied in the real widget by the client.
 
+### POST /createTask - ReCaptchaV2Classification (synchronous)
+
+Answers one reCAPTCHA v2 image-challenge picture that the client already has (the browser
+extension reads it inside Google's challenge frame), in CapSolver's format. The reply says
+*which cells* show the object; clicking them, handling new tiles and pressing Verify is up to the
+client. Model: `aws_capsolver/recaptcha` (loaded lazily on the first task, a failed import is
+retried every 5 minutes; without it every task fails with `ERROR_TASK_NOT_SUPPORTED` and is
+refunded).
+
+```bash
+curl -s localhost:8790/createTask -H 'content-type: application/json' -d '{"clientKey":"K","task":{
+  "type":"ReCaptchaV2Classification","image":"/9j/4AAQ...","question":"/m/0k4j",
+  "websiteURL":"https://example.com/login","websiteKey":"6Le..."}}'
+```
+```json
+{"errorId": 0, "taskId": "...", "status": "ready",
+ "solution": {"type": "multi", "objects": [0, 4, 8], "size": 3}}
+```
+
+| field | |
+|---|---|
+| `image` (required) | the challenge picture, base64 or a `data:` URL, at most 2 MB and 16-1000 px per side: the whole 3x3 (300x300) or 4x4 (450x450) payload picture, or one new 1x1 tile (100x100) of a dynamic challenge |
+| `question` (required) | the object: a Freebase id (`/m/0k4j` = cars, `/m/015qff` = traffic lights, ...) or its name as shown in the instruction, in any language (`cars`, `светофоры`, `trafik ışıkları`); at most 128 characters |
+| `size` (optional) | `3`, `4` or `1` when the client knows the layout; otherwise the model infers it from the picture. An answer of another size is refused (`ERROR_CAPTCHA_UNSOLVABLE`) |
+| `websiteURL`, `websiteKey` (optional) | accepted for CapSolver compatibility (validated, not used) |
+
+| `solution` | |
+|---|---|
+| `{"type": "multi", "objects": [0, 4, 8], "size": 3}` | 3x3 / 4x4: the cells to click, 0-based, row-major, sorted, no duplicates. An **empty** list is a valid answer (no cell shows the object: press *Skip*) |
+| `{"type": "single", "hasObject": true, "size": 1}` | one 1x1 tile: click it when `true` |
+
+Errors: `ERROR_INVALID_TASK_DATA` (no / undecodable / oversized `image`, empty or over-long
+`question`, `size` other than 1 / 3 / 4, bad `websiteURL`, the model rejecting the picture),
+`ERROR_TASK_NOT_SUPPORTED` (the model package is not installed, weights missing),
+`ERROR_CAPTCHA_UNSOLVABLE` (the model does not know the object - the description then starts
+with `unsupported question:` and the client should load another challenge -, found no answer,
+or answered outside the grid / with another size). Failed tasks are refunded. It shares the
+classification runners, queue and limits with the other synchronous tasks. Price: 3 tokens.
+
+Out of scope: **token-producing reCAPTCHA tasks** (`ReCaptchaV2Task` / `ReCaptchaV2TaskProxyLess`
+returning `gRecaptchaResponse`). The answer is always applied in the real widget by the client;
+nothing here forges tokens or hides automation from Google.
+
 ### POST /getBalance
 
 ```bash
@@ -325,7 +370,8 @@ curl -s localhost:8790/getBalance -d '{"clientKey":"MY-KEY"}'
 ```json
 {"errorId": 0, "balance": 9850, "tokens": 9850, "balanceUsd": 9.85, "tokensPerUsd": 1000,
  "prices": {"AntiAwsWafTask": 30, "AntiAwsWafTaskProxyLess": 30, "AwsWafClassification": 10,
-            "BlsClassification": 5, "GeeTestClassification": 8, "ImageToTextTask": 2},
+            "BlsClassification": 5, "GeeTestClassification": 8, "ImageToTextTask": 2,
+            "ReCaptchaV2Classification": 3},
  "packages": [],
  "usage": {"AntiAwsWafTask": {"created": 3, "solved": 3, "failed": 0},
            "AwsWafClassification": {"created": 6, "solved": 6, "failed": 0}}}
@@ -345,6 +391,7 @@ Every key holds **tokens**; tokens are sold in packages (`tokens_per_usd`, defau
 | `BlsClassification` | 5 |
 | `GeeTestClassification` | 8 (a family may have its own price, e.g. `"GeeTestClassification:gobang": 12`) |
 | `ImageToTextTask` | 2 (a module may have its own price, e.g. `"ImageToTextTask:bls_poland": 1`) |
+| `ReCaptchaV2Classification` | 3 (per picture: a dynamic challenge sends one task per new tile) |
 
 * The price is **reserved when the task is accepted** (concurrent tasks cannot overdraw a
   key) and **refunded automatically when the task fails**, times out or is cancelled - only
@@ -376,6 +423,7 @@ python -m aws_capsolver billing accounts
 {"ok": true, "version": "0.1.0", "vision": true,
  "text": {"bls_poland": true, "common": true, "ddddocr": true},
  "geetest": {"slide_offset": true, "click_points": true, "nine_grid": true, "gobang": true},
+ "recaptcha": true,
  "time": 1795127465,
  "load": {"tasks_active": 0, "waf_queued": 0, "waf_running": 0, "classify_queued": 0,
           "classify_running": 0, "classify_capacity": 9}}
@@ -385,7 +433,8 @@ package cannot be imported; WAF tasks then still solve
 PoW-only pages but every CAPTCHA fails with `ERROR_CAPTCHA_UNSOLVABLE`. `text` says which `ImageToTextTask` modules can be
 imported here (weights are only checked on use). `geetest` says which GeeTest solvers the
 model package provides (all `false` when it is not installed; a failed import is retried
-every 5 minutes). `load` counts WAF tasks and synchronous
+every 5 minutes). `recaptcha` is `true` when the reCAPTCHA model package imports and offers
+`classify()` (same retry). `load` counts WAF tasks and synchronous
 tasks (`classify_*` covers both classifications and `ImageToTextTask`). Used by the Docker
 healthcheck.
 
@@ -394,8 +443,8 @@ healthcheck.
 | errorCode | returned by | when |
 |---|---|---|
 | `ERROR_KEY_DENIED_ACCESS` | every POST | `clientKey` missing (`clientKey is required`) or not in `keys.json` / `AWSCS_KEYS` (`invalid clientKey`) |
-| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; `ImageToTextTask` without `body`, with an unknown `module` or bad `case` / `numeric` / `minLength` / `maxLength`; `GeeTestClassification` with a bad `question`, not exactly one image, a field of another family, a nine task without (or with two) targets, or a picture the GeeTest model rejects; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
-| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, a classification question family other than `grid` / `toycarcity`, an unknown GeeTest family, or an `ImageToTextTask` / `BlsClassification` / GeeTest model that is not installed |
+| `ERROR_INVALID_TASK_DATA` | every POST / createTask | body is not a JSON object or exceeds `AWSCS_MAX_BODY_BYTES`; no `task`; missing or non-http(s) `websiteURL`; over-long fields or control characters; `AntiAwsWafTask` without a proxy; unparsable proxy; non-string optional fields; classification without `question`/`images`, bad question format, more than 16 images, bad base64 or undecodable image; `ImageToTextTask` without `body`, with an unknown `module` or bad `case` / `numeric` / `minLength` / `maxLength`; `GeeTestClassification` with a bad `question`, not exactly one image, a field of another family, a nine task without (or with two) targets, or a picture the GeeTest model rejects; `ReCaptchaV2Classification` without `image` / `question`, with a bad `size` or a picture outside 16-1000 px; target URL resolves to a private address (unless `AWSCS_ALLOW_PRIVATE=1`) |
+| `ERROR_TASK_NOT_SUPPORTED` | createTask | unknown `task.type`, a classification question family other than `grid` / `toycarcity`, an unknown GeeTest family, or an `ImageToTextTask` / `BlsClassification` / GeeTest / reCAPTCHA model that is not installed |
 | `ERROR_TASKID_INVALID` | getTaskResult | unknown, expired, or another key's `taskId` |
 | `ERROR_CAPTCHA_UNSOLVABLE` | task result / classification | every CAPTCHA round failed, unsupported problem type, vision unavailable, or an internal solver error |
 | `ERROR_PROXY_CONNECT_REFUSED` | task result | the proxy failed, refused the connection, timed out connecting, or answered 407 (proxy authentication) |
@@ -486,6 +535,7 @@ sol = client.solve_aws_waf("https://protected.example/", proxy="http://u:p@1.2.3
                            timeout=150)          # polls getTaskResult every 2 s
 sol["cookie"], sol["userAgent"]
 client.classify("aws:grid:bed", tiles_b64_or_bytes)  # {"objects": [...]}
+client.classify_recaptcha_v2(grid_bytes, "/m/0k4j", size=3)  # {"type": "multi", "objects": [...], "size": 3}
 client.create_task({...}); client.get_task_result(task_id, timeout=150, poll_interval=2)
 client.get_balance(); client.health()
 ```

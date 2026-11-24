@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>reCAPTCHA v2 fixture</title>
+<!-- Host page of the local reCAPTCHA v2 reproduction. Like the real widget, the checkbox and the
+     image challenge are two cross-origin iframes (this page is 127.0.0.1, the frames localhost):
+     recaptcha_anchor.html (the "I'm not a robot" checkbox) and recaptcha_bframe.html (the
+     challenge, parked off-screen at top:-10000px until the checkbox is clicked, and parked
+     there again when it is solved - which is how Google hides it). -->
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  #anchor { width: 304px; height: 78px; border: 0; }
+  #bwrap { position: absolute; left: 30px; top: -10000px; visibility: hidden; background: #fff;
+    box-shadow: 0 0 6px #0005; }
+  #bwrap.open { top: 120px; visibility: visible; }
+  #bframe { width: 400px; height: 580px; border: 0; display: block; }
+</style></head>
+<body>
+<h1>reCAPTCHA v2 fixture</h1>
+<iframe id="anchor" title="reCAPTCHA"></iframe>
+<div id="bwrap"><iframe id="bframe" title="recaptcha challenge expires in two minutes"></iframe></div>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const mode = q.get("mode") || "static33";
+const other = `http://localhost:${location.port}`;
+document.getElementById("anchor").src = `${other}/fixtures/recaptcha_anchor.html`;
+document.getElementById("bframe").src = `${other}/fixtures/recaptcha_bframe.html?mode=${encodeURIComponent(mode)}`;
+addEventListener("message", (e) => {
+  if (e.origin !== other || !e.data || typeof e.data !== "object") return;
+  const wrap = document.getElementById("bwrap");
+  if (e.data.type === "rc-open") {
+    wrap.classList.add("open");
+    document.getElementById("bframe").contentWindow.postMessage({ type: "rc-shown" }, other);
+  } else if (e.data.type === "rc-solved") {
+    wrap.classList.remove("open");
+    document.getElementById("anchor").contentWindow.postMessage({ type: "rc-checked" }, other);
+    document.title = "RECAPTCHA OK";
+  }
+});
+</script>
+</body></html>

@@ -3,7 +3,7 @@
     "message": "Captchosa"
   },
   "extDescription": {
-    "message": "Solves AWS WAF, GeeTest, BLS and image captchas with your own self-hosted Captchosa service."
+    "message": "Solves AWS WAF, GeeTest, reCAPTCHA v2 image, BLS and text captchas with your own self-hosted Captchosa service."
   },
   "on": {
     "message": "On"
@@ -35,6 +35,9 @@
   "kind_geetest": {
     "message": "GeeTest"
   },
+  "kind_recaptcha": {
+    "message": "reCAPTCHA v2"
+  },
   "desc_awsGrid": {
     "message": "Picture grid in the AWS WAF widget"
   },
@@ -52,6 +55,9 @@
   },
   "desc_geetest": {
     "message": "GeeTest v3/v4: slide, icon/word click, nine-grid, gobang"
+  },
+  "desc_recaptcha": {
+    "message": "Image challenge: 3×3, 4×4 and new tiles (“select all images with …”)"
   },
   "closeBadge": {
     "message": "Hide"

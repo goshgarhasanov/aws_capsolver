@@ -229,6 +229,11 @@ def scenarios(context, args):
         ext.settings(serviceUrl=SERVICE)
         geetest_real_service(context)
         return
+    if args.only == "recaptcha":
+        recaptcha_scenarios(context, ext)
+        ext.settings(serviceUrl=SERVICE)
+        recaptcha_real_service(context)
+        return
 
     # ---- AWS WAF grid: open shadow root, fetch, first answer rejected (2 rounds)
     page = context.new_page()
@@ -457,6 +462,9 @@ def scenarios(context, args):
     page.close()
 
     geetest_real_service(context)
+    recaptcha_scenarios(context, ext)
+    ext.settings(serviceUrl=SERVICE)
+    recaptcha_real_service(context)
 
     # ---- popup reflects counters and log
     opt.reload()
@@ -585,13 +593,98 @@ def geetest_real_service(context):
     page.close()
 
 
+def recaptcha_scenarios(context, ext):
+    """reCAPTCHA v2 fixture (cross-origin anchor + bframe) against the mocked ReCaptchaV2Classification."""
+
+    ext.settings(serviceUrl=f"{FIX}/mockapi")
+
+    def run_page(mode):
+        since = len(fixture_log()["recaptcha"])
+        n_mock = len(fixture_log()["mockapi"])
+        page = context.new_page()
+        page.goto(f"{FIX}/fixtures/recaptcha.html?mode={mode}")
+        ok = wait_until(lambda: page.title() == "RECAPTCHA OK", 90)
+        if ok:  # the pill turns green once the solver saw the challenge close
+            wait_until(lambda: (page_badge(page) or [""])[0].endswith("ok"), 10)
+            time.sleep(1)
+        logs = fixture_log()["recaptcha"][since:]
+        mocks = [m for m in fixture_log()["mockapi"][n_mock:] if m.get("type") == "ReCaptchaV2Classification"]
+        badge = page_badge(page)
+        checked = None
+        for frame in page.frames:
+            if "recaptcha_anchor" in frame.url:
+                checked = frame.evaluate("() => document.getElementById('recaptcha-anchor').getAttribute('aria-checked')")
+        page.close()
+        events = lambda name: [e for e in logs if e.get("event") == name]
+        return ok, events, mocks, badge, checked
+
+    ok, ev, mocks, badge, checked = run_page("static33")
+    check("recaptcha static 3x3: checkbox clicked, cells 0,4,8 picked, verified", ok and len(ev("click")) == 1 and
+          len(ev("verify")) == 1 and ev("verify")[0].get("selected") == [0, 4, 8], json.dumps(ev("verify")))
+    m = mocks[0] if mocks else {}
+    check("recaptcha static 3x3: task = 300x300 picture + question text + size 3",
+          len(mocks) == 1 and m.get("picture") == "s33_cars" and m.get("question") == "cars" and m.get("size") == 3 and
+          m.get("dims") == [300, 300], json.dumps(mocks))
+    after = [e for e in ev("reload") + ev("verify") if not e.get("accepted")]
+    check("recaptcha static 3x3: checkbox ticked, pill shows success, nothing clicked after it",
+          checked == "true" and badge and badge[0].endswith("ok") and not after, f"{checked!r} {badge!r} {after!r}")
+
+    ok, ev, mocks, _, _ = run_page("wrongfirst")
+    verifies = ev("verify")
+    check("recaptcha 'Please try again': second picture solved", ok and len(verifies) == 2 and
+          not verifies[0].get("accepted") and verifies[1].get("accepted"), json.dumps(verifies))
+
+    ok, ev, mocks, _, _ = run_page("unsupported")
+    check("recaptcha unsupported question: reload pressed, next picture solved", ok and len(ev("reload")) == 1 and
+          len(ev("verify")) == 1 and [m.get("question") for m in mocks] == ["zebras", "cars"], json.dumps(mocks))
+
+    ok, ev, mocks, _, _ = run_page("tile44")
+    m = mocks[0] if mocks else {}
+    check("recaptcha 4x4: cells 0,1,4,5 picked from the 450x450 picture", ok and len(ev("verify")) == 1 and
+          ev("verify")[0].get("selected") == [0, 1, 4, 5] and m.get("size") == 4 and m.get("dims") == [450, 450],
+          json.dumps({"verify": ev("verify"), "mocks": mocks}))
+
+    ok, ev, mocks, _, _ = run_page("dynamic33")
+    verifies = ev("verify")
+    tiles = [m.get("picture") for m in mocks if m.get("size") == 1]
+    check("recaptcha dynamic 3x3: new tiles classified one by one, clicked until none left",
+          ok and len(verifies) == 1 and verifies[0].get("clicks") == [1, 3, 1] and sorted(tiles) == ["t_no_b", "t_no_c", "t_yes_a"]
+          and all(m.get("dims") == [100, 100] for m in mocks if m.get("size") == 1),
+          json.dumps({"verify": verifies, "mocks": mocks}))
+
+    # the switch: off -> neither the checkbox nor the challenge is touched
+    ext.settings(solvers={"recaptcha": False})
+    since = len(fixture_log()["recaptcha"])
+    page = context.new_page()
+    page.goto(f"{FIX}/fixtures/recaptcha.html?mode=static33")
+    time.sleep(4)
+    check("recaptcha: off when switched off", not fixture_log()["recaptcha"][since:] and page.title() != "RECAPTCHA OK")
+    page.close()
+    ext.settings(solvers={"recaptcha": True})
+
+
+def recaptcha_real_service(context):
+    """Against the real service the model may be missing: a typed error in the pill, or answers applied."""
+    since = len(fixture_log()["recaptcha"])
+    page = context.new_page()
+    page.goto(f"{FIX}/fixtures/recaptcha.html?mode=static33")
+    got = wait_until(lambda: page.title() == "RECAPTCHA OK" or
+                     ((page_badge(page) or [""])[0].endswith("error") and page_badge(page)), 120)
+    badge = page_badge(page)
+    acted = [e for e in fixture_log()["recaptcha"][since:] if e.get("event") in ("verify", "reload")]
+    check("recaptcha (real service): answer applied, or a typed error", bool(got) and (
+          page.title() == "RECAPTCHA OK" or bool(acted) or (badge and "ERROR_" in badge[1])),
+          f"{badge!r} acted={json.dumps(acted)}")
+    page.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--grids", type=int, default=4)
     ap.add_argument("--grant-all-urls", action="store_true",
                     help="load a copy of the extension with <all_urls> granted (cross-origin captcha path)")
-    ap.add_argument("--only", choices=("geetest",), help="run only one group of scenarios")
+    ap.add_argument("--only", choices=("geetest", "recaptcha"), help="run only one group of scenarios")
     args = ap.parse_args()
     run(args)
     failed = [r for r in results if not r[1]]

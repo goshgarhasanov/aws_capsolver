@@ -1,0 +1,159 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>reCAPTCHA bframe fixture</title>
+<!-- Local reproduction of the reCAPTCHA v2 image challenge frame
+     (www.google.com/recaptcha/api2/bframe): #rc-imageselect, the instruction in
+     .rc-imageselect-desc(-no-canonical) strong, table.rc-imageselect-table-33 / -44 with one
+     payload picture per grid (img.rc-image-tile-33 / -44 shifted in every cell), selected tiles
+     (.rc-imageselect-tileselected), the dynamic 3x3 (.rc-imageselect-dynamic-selected, then a new
+     img.rc-image-tile-11), the error lines and the reload / Verify buttons. Pictures come from
+     /recaptcha/payload on this origin; every click, reload and verify is logged to /recaptcha/log.
+     Modes: static33, wrongfirst, unsupported, tile44, dynamic33. -->
+<style>
+  body { margin: 0; font: 14px Roboto, sans-serif; }
+  #rc-imageselect { width: 400px; background: #fff; }
+  .rc-imageselect-instructions { background: #1a73e8; color: #fff; padding: 16px 20px; margin: 7px; }
+  .rc-imageselect-desc-no-canonical, .rc-imageselect-desc { font-size: 16px; }
+  .rc-imageselect-desc-no-canonical strong, .rc-imageselect-desc strong { display: block; font-size: 24px; }
+  .rc-imageselect-desc-no-canonical span, .rc-imageselect-desc span { display: block; font-size: 13px; }
+  .rc-imageselect-target { margin: 0 7px; }
+  table { border-spacing: 4px; }
+  td.rc-imageselect-tile { padding: 0; cursor: pointer; position: relative; }
+  .rc-image-tile-wrapper { position: relative; overflow: hidden; }
+  .rc-image-tile-wrapper img { position: absolute; }
+  img.rc-image-tile-11 { width: 100%; height: 100%; left: 0; top: 0; }
+  .rc-imageselect-tileselected .rc-image-tile-wrapper { transform: scale(.8); }
+  .rc-imageselect-dynamic-selected { opacity: .3; }
+  .rc-imageselect-incorrect-response, .rc-imageselect-error-select-more,
+  .rc-imageselect-error-dynamic-more, .rc-imageselect-error-select-something { color: #d00; margin: 6px 14px; display: none; }
+  .rc-footer { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px;
+    border-top: 1px solid #dfdfdf; }
+  #recaptcha-reload-button { width: 24px; height: 24px; }
+  #recaptcha-verify-button { background: #1a73e8; color: #fff; border: 0; padding: 10px 18px; border-radius: 2px; }
+</style></head>
+<body>
+<div id="rc-imageselect">
+  <div class="rc-imageselect-response-field"></div>
+  <div class="rc-imageselect-payload">
+    <div class="rc-imageselect-instructions"><div class="rc-imageselect-desc-wrapper" id="desc"></div></div>
+    <div class="rc-imageselect-challenge">
+      <div id="rc-imageselect-target" class="rc-imageselect-target" dir="ltr" role="presentation"></div>
+    </div>
+    <div class="rc-imageselect-incorrect-response">Please try again.</div>
+    <div class="rc-imageselect-error-select-more">Please select all matching images.</div>
+    <div class="rc-imageselect-error-dynamic-more">Please also check the new images.</div>
+    <div class="rc-imageselect-error-select-something">Please select around the object, or reload if there are none.</div>
+  </div>
+  <div class="rc-footer">
+    <div class="rc-controls"><button id="recaptcha-reload-button" title="Get a new challenge">&#x21bb;</button></div>
+    <button id="recaptcha-verify-button">Verify</button>
+  </div>
+</div>
+<script>
+"use strict";
+const MODE = new URLSearchParams(location.search).get("mode") || "static33";
+const CARS = { id: "s33_cars", q: "cars", size: 3, answer: [0, 4, 8] };
+const SCENARIOS = {
+  static33: [CARS],
+  wrongfirst: [{ id: "s33_bus", q: "buses", size: 3, answer: null }, Object.assign({ error: "incorrect-response" }, CARS)],
+  unsupported: [{ id: "s33_zebra", q: "zebras", size: 3, answer: [0] }, CARS],
+  tile44: [{ id: "g44_moto", q: "motorcycles", size: 4, answer: [0, 1, 4, 5], canonical: true }],
+  // cell 1 gets a tile with the object (to click again), then one without; cell 3 one without
+  dynamic33: [{ id: "d33_lights", q: "traffic lights", size: 3, answer: [1, 3],
+                dynamic: { 1: ["t_yes_a", "t_no_b"], 3: ["t_no_c"] } }],
+};
+const pictures = SCENARIOS[MODE] || SCENARIOS.static33;
+let index = 0;
+let pic = null;
+let queues = {};     // dynamic: cell -> pictures still to come
+let showing = {};    // dynamic: cell -> picture id now shown
+let clicks = [];
+
+function log(entry) {
+  return fetch("/recaptcha/log", { method: "POST",
+    body: JSON.stringify(Object.assign({ page: "bframe", mode: MODE, picture: pic && pic.id }, entry)) });
+}
+
+function hideErrors() {
+  for (const el of document.querySelectorAll("[class^='rc-imageselect-error'], .rc-imageselect-incorrect-response")) el.style.display = "none";
+}
+
+function render(i, error) {
+  index = i;
+  pic = pictures[i];
+  queues = JSON.parse(JSON.stringify(pic.dynamic || {}));
+  showing = {};
+  clicks = [];
+  const n = pic.size;
+  const cls = pic.canonical ? "rc-imageselect-desc" : "rc-imageselect-desc-no-canonical";
+  const what = pic.canonical ? "squares" : "images";
+  const tail = pic.dynamic ? "Click verify once there are none left" : "If there are none, click skip";
+  document.getElementById("desc").innerHTML = `<div class="${cls}" style="width: 352px; font-size: 14px;">` +
+    `Select all ${what} with <strong>${pic.q}</strong><span>${tail}</span></div>`;
+  const tile = n === 3 ? 126 : 93;
+  let html = `<table class="rc-imageselect-table-${n}${n}"><tbody>`;
+  for (let r = 0; r < n; r++) {
+    html += "<tr>";
+    for (let c = 0; c < n; c++) {
+      html += `<td role="button" tabindex="0" class="rc-imageselect-tile" aria-label="Image challenge">` +
+        `<div class="rc-image-tile-target"><div class="rc-image-tile-wrapper" style="width:${tile}px;height:${tile}px">` +
+        `<img class="rc-image-tile-${n}${n}" src="/recaptcha/payload?id=${pic.id}" alt="" ` +
+        `style="width:${n * 100}%;height:${n * 100}%;top:-${r * 100}%;left:-${c * 100}%">` +
+        `<div class="rc-image-tile-overlay"></div></div><div class="rc-imageselect-checkbox"></div></div></td>`;
+    }
+    html += "</tr>";
+  }
+  document.getElementById("rc-imageselect-target").innerHTML = html + "</tbody></table>";
+  hideErrors();
+  if (error) document.querySelector(`.rc-imageselect-${error}`).style.display = "block";
+  document.querySelectorAll("td.rc-imageselect-tile").forEach((td, k) => td.addEventListener("click", () => onTile(td, k)));
+}
+
+function onTile(td, k) {
+  hideErrors();
+  if (!pic.dynamic) {
+    td.classList.toggle("rc-imageselect-tileselected");
+    clicks.push(k);
+    return;
+  }
+  if (td.classList.contains("rc-imageselect-dynamic-selected")) return;
+  clicks.push(k);
+  td.classList.add("rc-imageselect-dynamic-selected");
+  setTimeout(() => {
+    const next = (queues[k] || []).shift() || `t_no_x${k}_${clicks.length}`;
+    showing[k] = next;
+    const wrap = td.querySelector(".rc-image-tile-wrapper");
+    wrap.innerHTML = `<img class="rc-image-tile-11" src="/recaptcha/payload?id=${next}" alt=""><div class="rc-image-tile-overlay"></div>`;
+    td.classList.remove("rc-imageselect-dynamic-selected");
+  }, 900);
+}
+
+function selected() {
+  return [...document.querySelectorAll("td.rc-imageselect-tile")].map((td, k) => td.classList.contains("rc-imageselect-tileselected") ? k : -1)
+    .filter((k) => k >= 0);
+}
+
+document.getElementById("recaptcha-verify-button").addEventListener("click", async () => {
+  let accepted;
+  if (pic.answer === null) accepted = false;
+  else if (pic.dynamic) {
+    const firstClicks = [...new Set(clicks)].sort().slice(0, pic.answer.length);
+    accepted = JSON.stringify(firstClicks) === JSON.stringify(pic.answer) &&
+      Object.values(queues).every((q) => !q.length) && !Object.values(showing).some((id) => id.startsWith("t_yes"));
+  } else accepted = JSON.stringify(selected()) === JSON.stringify(pic.answer);
+  await log({ event: "verify", selected: pic.dynamic ? null : selected(), clicks, accepted });
+  if (accepted) {
+    parent.postMessage({ type: "rc-solved" }, "*");
+    return;
+  }
+  const nextIndex = index + 1 < pictures.length ? index + 1 : index;
+  render(nextIndex, pictures[nextIndex].error || "incorrect-response");
+});
+
+document.getElementById("recaptcha-reload-button").addEventListener("click", () => {
+  log({ event: "reload" });
+  render(index + 1 < pictures.length ? index + 1 : index, null);
+});
+
+render(0, null);
+</script>
+</body></html>

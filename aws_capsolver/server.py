@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, bls_bridge, geetest_bridge, text, vision_bridge
+from . import __version__, bls_bridge, geetest_bridge, recaptcha_bridge, text, vision_bridge
 from .billing import Billing, load_pricing
 from .config import KeyStore, Settings, UsageStore
 from .tasks import CLASSIFY_TYPES, Task, TaskManager
@@ -120,6 +120,8 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
             threading.Thread(target=text.warmup, name="text-warmup", daemon=True).start()
             threading.Thread(target=geetest_bridge.warmup, name="geetest-warmup",
                              daemon=True).start()
+            threading.Thread(target=recaptcha_bridge.warmup, name="recaptcha-warmup",
+                             daemon=True).start()
         logger.info("aws_capsolver %s ready (workers=%d, vision=%s, bls=%s, text=%s, "
                     "ssrf_guard=%s)", __version__, settings.workers, vision_bridge.available(),
                     bls_bridge.available(), _text_modules(), not settings.allow_private)
@@ -216,6 +218,7 @@ def create_app(settings: Optional[Settings] = None, manager: Optional[TaskManage
         return {"ok": not manager.closed, "version": __version__,
                 "vision": vision_bridge.available(), "text": _text_modules(),
                 "geetest": geetest_bridge.solvers(),
+                "recaptcha": recaptcha_bridge.available(),
                 "time": int(time.time()), "load": manager.stats()}
 
     return app

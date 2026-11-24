@@ -19,6 +19,7 @@ const TASK_TYPES = {
   blsGrid: "BlsClassification",
   text: "ImageToTextTask",
   geetest: "GeeTestClassification",
+  recaptcha: "ReCaptchaV2Classification",
 };
 const GEETEST_QUESTION = /^geetest:(slide|icon|word|space|gobang|nine(:[^\x00-\x1f]{1,64})?)$/;
 // ImageToTextTask module per text solver
@@ -145,6 +146,13 @@ function buildTask(kind, raw) {
         if (t.hints.length > 8 || !t.hints.every((h) => str(h, 4 * 1024 * 1024))) break;
         out.hints = t.hints;
       }
+      return out;
+    }
+    case "recaptcha": {
+      // question: the instruction's object name (any language) or a Freebase id
+      if (!str(t.image, 4 * 1024 * 1024) || !str(t.question, 128) || /[\x00-\x1f\x7f]/.test(t.question)) break;
+      const out = { type: TASK_TYPES.recaptcha, image: t.image, question: t.question };
+      if (t.size === 1 || t.size === 3 || t.size === 4) out.size = t.size;
       return out;
     }
     case "awsToken": {
@@ -311,6 +319,18 @@ async function handleCapture(msg, sender) {
   return { body: btoa(bin) };
 }
 
+// The reCAPTCHA checkbox frame saw "ticked": pass it to the tab's frames (the challenge frame
+// waits for it after Verify; it cannot see the checkbox, a sibling cross-origin frame).
+async function relayRecaptchaChecked(sender) {
+  if (!sender.tab || sender.tab.id == null || sender.tab.id < 0) return {};
+  try {
+    await chrome.tabs.sendMessage(sender.tab.id, { type: "recaptchaChecked" });
+  } catch (_) {
+    // no listener in any frame (no challenge was open)
+  }
+  return {};
+}
+
 async function handleTest() {
   const settings = await getSettings();
   const out = { serviceUrl: settings.serviceUrl };
@@ -347,6 +367,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "capture") work = handleCapture(msg, sender);
   else if (msg.type === "badge") work = tabBadge(sender.tab ? sender.tab.id : null, msg.state, msg.title);
   else if (msg.type === "test") work = handleTest();
+  else if (msg.type === "recaptchaChecked") work = relayRecaptchaChecked(sender);
   else return false;
   work.then(
     (value) => sendResponse(Object.assign({ ok: true }, value || {})),

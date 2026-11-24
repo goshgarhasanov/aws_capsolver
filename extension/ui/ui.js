@@ -104,6 +104,11 @@ const KIND_ICONS = {
   geetest: '<rect x="1.5" y="2" width="17" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
     '<path d="M11 5h2.2a1.3 1.3 0 0 1 2.6 0H16v4.5h-5z" class="pick"/>' +
     '<rect x="1.5" y="15" width="17" height="2" rx="1" opacity=".45"/><rect x="4" y="13.6" width="5" height="4.8" rx="1.4"/>',
+  // reCAPTCHA v2 image challenge: a 3x3 picture grid with a check mark over the picked tiles
+  recaptcha: '<rect x="2" y="2" width="4.5" height="4.5" rx=".8" class="pick"/><rect x="7.75" y="2" width="4.5" height="4.5" rx=".8"/>' +
+    '<rect x="13.5" y="2" width="4.5" height="4.5" rx=".8"/><rect x="2" y="7.75" width="4.5" height="4.5" rx=".8"/>' +
+    '<rect x="7.75" y="7.75" width="4.5" height="4.5" rx=".8" class="pick"/><rect x="2" y="13.5" width="4.5" height="4.5" rx=".8"/>' +
+    '<path d="M11.2 14.6l2.3 2.3 4.6-5.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
 function kindIcon(kind) {

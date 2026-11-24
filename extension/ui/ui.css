@@ -187,4 +187,5 @@ body.options .about p { color: var(--muted); margin: 4px 0 12px; }
 .kind-blsGrid { --kind: #2563eb; --kind-pick: #1d4ed8; }
 .kind-blsText { --kind: #dc2626; }
 .kind-text { --kind: #7c3aed; }
+.kind-recaptcha { --kind: #4a90e2; --kind-pick: #1a73e8; }
 .solver.off .kind-icon { filter: grayscale(1); opacity: .55; }

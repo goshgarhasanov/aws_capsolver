@@ -34,6 +34,7 @@ DEFAULT_PRICES: Dict[str, int] = {
     "BlsClassification": 5,
     "GeeTestClassification": 8,
     "ImageToTextTask": 2,
+    "ReCaptchaV2Classification": 3,
 }
 DEFAULT_TOKENS_PER_USD = 1000
 MAX_TOKENS = 10 ** 12

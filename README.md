@@ -9,7 +9,7 @@ solving service; the models run locally (CPU is enough).
 | | |
 | --- | --- |
 | **Service** | Python / FastAPI, package `aws_capsolver`, default port `8790` |
-| **Extension** | Chrome / Chromium, Manifest V3, v1.0.4 ([download](../../releases/latest)) |
+| **Extension** | Chrome / Chromium, Manifest V3, v1.0.5 ([download](../../releases/latest)) |
 | **API** | `createTask`, `getTaskResult`, `getBalance`, `health` (CapSolver-style) |
 | **Runs on** | Linux / macOS, Python 3.10+, CPU-only PyTorch, or Docker |
 
@@ -24,6 +24,7 @@ solving service; the models run locally (CPU is enough).
 | `ImageToTextTask` | Text / image captchas | BLS Poland model, a general text model, ddddocr fallback |
 | `GeeTestClassification` | GeeTest v3 / v4 pictures | Slide gap, icon / word / space click points, nine-grid, gobang |
 | `BlsClassification` | BLS "select all boxes with number NNN" grid | Needs the optional `bls_capsolver` model |
+| `ReCaptchaV2Classification` | reCAPTCHA v2 image challenge (3x3, 4x4, dynamic 1x1 tiles) | One already-fetched picture + the object (`/m/0k4j` or text in any language); returns the cells to click. No tokens are produced |
 
 ### Measured results
 
@@ -46,8 +47,8 @@ applies the answer like a person would (pointer events, human-like slider drags)
 
 ![Options page](extension/docs/screenshots/options-light.png)
 
-Supported on the page: AWS WAF grid widget and token pages, GeeTest v3 / v4, BLS grid and
-BLS Poland text captchas, and general text captchas next to a captcha input.
+Supported on the page: AWS WAF grid widget and token pages, GeeTest v3 / v4, the reCAPTCHA v2
+image challenge, BLS grid and BLS Poland text captchas, and general text captchas next to a captcha input.
 UI languages: English, Turkish, Azerbaijani, Russian.
 
 ### Install
@@ -88,7 +89,7 @@ Client keys live in `keys.json` (git-ignored):
 ```
 
 > Every key has a **token balance**; each solved task costs tokens (AWS WAF token = 30,
-> grid = 10, GeeTest = 8, BLS grid = 5, text = 2). Failed tasks are refunded.
+> grid = 10, GeeTest = 8, BLS grid = 5, reCAPTCHA v2 picture = 3, text = 2). Failed tasks are refunded.
 > A key without `"balance"` starts with only 1000 tokens, so set a high balance for your own keys.
 
 ---
@@ -133,7 +134,7 @@ client key; the request and response formats are the same.
 
 ```
 aws_capsolver/   the service: waf/ (AWS WAF protocol), vision/ (grid models), text/ (OCR),
-                 geetest/, tasks.py, billing.py, server.py
+                 geetest/, recaptcha/, tasks.py, billing.py, server.py
 extension/       Chrome extension (MV3) + build tools
 clients/         Python and JavaScript clients
 deploy/          install.sh + systemd unit

@@ -169,6 +169,21 @@ export class AwsCapsolverClient {
     if (created.status === "ready") return created.solution || {};
     return this.getTaskResult(created.taskId);
   }
+
+  /**
+   * ReCaptchaV2Classification (synchronous).
+   * @param {string|Uint8Array|ArrayBuffer} image the 3x3 / 4x4 grid picture or one 1x1 tile
+   * @param {string} question a Freebase id ("/m/0k4j") or the object name in any language
+   * @param {number} [size] 3, 4 or 1 when known
+   * @returns {Promise<{type: string, objects?: number[], hasObject?: boolean, size: number}>}
+   */
+  async classifyRecaptchaV2(image, question, size) {
+    const task = { type: "ReCaptchaV2Classification", image: toBase64(image), question };
+    if (size != null) task.size = size;
+    const created = await this.createTask(task);
+    if (created.status === "ready") return created.solution || {};
+    return this.getTaskResult(created.taskId);
+  }
 }
 
 export default AwsCapsolverClient;

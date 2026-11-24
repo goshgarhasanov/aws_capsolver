@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>reCAPTCHA anchor fixture</title>
+<!-- The checkbox frame (www.google.com/recaptcha/api2/anchor): span#recaptcha-anchor with
+     role=checkbox and aria-checked. A click opens the challenge (postMessage to the host). -->
+<style>
+  body { margin: 0; font: 14px Roboto, sans-serif; }
+  .rc-anchor { width: 300px; height: 74px; border: 1px solid #d3d3d3; background: #f9f9f9; display: flex;
+    align-items: center; gap: 12px; padding-left: 12px; box-sizing: border-box; }
+  #recaptcha-anchor { display: inline-block; width: 24px; height: 24px; border: 2px solid #c1c1c1;
+    border-radius: 2px; background: #fff; cursor: pointer; }
+  #recaptcha-anchor.recaptcha-checkbox-loading { border-color: #4a90e2; }
+  #recaptcha-anchor[aria-checked="true"] { background: #0f9d58; border-color: #0f9d58; }
+</style></head>
+<body>
+<div class="rc-anchor rc-anchor-normal">
+  <span class="recaptcha-checkbox goog-inline-block recaptcha-checkbox-unchecked" role="checkbox"
+        aria-checked="false" id="recaptcha-anchor" tabindex="0"></span>
+  <label id="recaptcha-anchor-label">I'm not a robot</label>
+</div>
+<script>
+"use strict";
+const box = document.getElementById("recaptcha-anchor");
+box.addEventListener("click", () => {
+  if (box.getAttribute("aria-checked") === "true") return;
+  fetch("/recaptcha/log", { method: "POST", body: JSON.stringify({ page: "anchor", event: "click", trusted: false }) });
+  box.className = "recaptcha-checkbox goog-inline-block recaptcha-checkbox-loading";
+  parent.postMessage({ type: "rc-open" }, "*");
+});
+addEventListener("message", (e) => {
+  if (e.data && e.data.type === "rc-checked") {
+    box.className = "recaptcha-checkbox goog-inline-block recaptcha-checkbox-checked";
+    box.setAttribute("aria-checked", "true");
+  }
+});
+</script>
+</body></html>

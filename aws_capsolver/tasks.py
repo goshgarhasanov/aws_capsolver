@@ -16,7 +16,7 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from . import bls_bridge, geetest_bridge, text, vision_bridge
+from . import bls_bridge, geetest_bridge, recaptcha_bridge, text, vision_bridge
 from .billing import BillingError, InsufficientTokens
 from .config import Settings, UsageStore
 from .waf.errors import (ALL_CODES, ERROR_CAPTCHA_UNSOLVABLE, ERROR_INVALID_TASK_DATA,
@@ -34,10 +34,12 @@ TASK_CLASSIFY = "AwsWafClassification"
 TASK_BLS = "BlsClassification"
 TASK_TEXT = "ImageToTextTask"
 TASK_GEETEST = "GeeTestClassification"
+TASK_RECAPTCHA = "ReCaptchaV2Classification"
 # synchronous task types: answered in the createTask reply, run on the bounded
 # classification executor (shared runners, queue and admission control)
-CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST)
-SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST)
+CLASSIFY_TYPES = (TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST, TASK_RECAPTCHA)
+SUPPORTED_TYPES = (TASK_WAF, TASK_WAF_PROXYLESS, TASK_CLASSIFY, TASK_BLS, TASK_TEXT, TASK_GEETEST,
+                   TASK_RECAPTCHA)
 BLS_GRID_TILES = 9
 MAX_IMAGES = 16
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -450,6 +452,72 @@ def run_geetest(job: GeeTestJob) -> Dict[str, Any]:
     raise SolverError(ERROR_TASK_NOT_SUPPORTED, f"GeeTest family {job.module!r} is not supported")
 
 
+# ---------------------------------------------------------------------- reCAPTCHA v2
+
+RECAPTCHA_MAX_QUESTION = 128
+RECAPTCHA_MAX_SITE_KEY = 256
+RECAPTCHA_MAX_SIDE = 1000        # px; reCAPTCHA pictures are 300 (3x3), 450 (4x4) or 100 (one tile)
+RECAPTCHA_MIN_SIDE = 16
+
+
+@dataclass(frozen=True)
+class RecaptchaJob:
+    """A validated ReCaptchaV2Classification."""
+    image: bytes
+    question: str
+    size: Optional[int] = None        # 1 / 3 / 4 when the client knows the layout
+    website_url: Optional[str] = None
+    website_key: Optional[str] = None
+
+
+def parse_recaptcha(task: Dict[str, Any]) -> RecaptchaJob:
+    """
+    Validate a ReCaptchaV2Classification payload (CapSolver shape):
+    {image: base64 | data: URL, question: "/m/0k4j" | instruction text, size?: 1|3|4,
+     websiteURL?, websiteKey?}.
+    """
+    if task.get("image") in (None, ""):
+        raise SolverError(ERROR_INVALID_TASK_DATA, "image is required (the challenge picture, base64)")
+    image = _decode_image(task.get("image"), "image")
+    question = _opt_str(task, "question", RECAPTCHA_MAX_QUESTION)
+    if not question:
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          "question is required (a Freebase id such as /m/0k4j, or the object name)")
+    size = None
+    if task.get("size") is not None:
+        size = task.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size not in recaptcha_bridge.SIZES:
+            raise SolverError(ERROR_INVALID_TASK_DATA, "size must be 1, 3 or 4")
+    return RecaptchaJob(image=image, question=question, size=size,
+                        website_url=_http_url(task, "websiteURL"),
+                        website_key=_opt_str(task, "websiteKey", RECAPTCHA_MAX_SITE_KEY))
+
+
+def run_recaptcha(job: RecaptchaJob) -> Dict[str, Any]:
+    """The model call for a validated ReCaptchaV2Classification."""
+    from PIL import Image, UnidentifiedImageError
+    try:
+        with Image.open(io.BytesIO(job.image)) as img:
+            width, height = img.size
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, "image is not a readable picture") from exc
+    if not (RECAPTCHA_MIN_SIDE <= width <= RECAPTCHA_MAX_SIDE
+            and RECAPTCHA_MIN_SIDE <= height <= RECAPTCHA_MAX_SIDE):
+        raise SolverError(ERROR_INVALID_TASK_DATA,
+                          f"image must be {RECAPTCHA_MIN_SIDE}-{RECAPTCHA_MAX_SIDE} px per side")
+    try:
+        return recaptcha_bridge.classify(job.image, job.question, job.size)
+    except recaptcha_bridge.RecaptchaInvalidInput as exc:
+        raise SolverError(ERROR_INVALID_TASK_DATA, str(exc)) from exc
+    except recaptcha_bridge.RecaptchaUnavailable as exc:
+        raise SolverError(ERROR_TASK_NOT_SUPPORTED, str(exc)) from exc
+    except recaptcha_bridge.RecaptchaUnsupported as exc:
+        # the client should load another challenge (reCAPTCHA's reload button)
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, f"unsupported question: {exc}") from exc
+    except recaptcha_bridge.RecaptchaUnsolvable as exc:
+        raise SolverError(ERROR_CAPTCHA_UNSOLVABLE, str(exc)) from exc
+
+
 def parse_sync_job(task: Dict[str, Any], default_text_module: str = text.DEFAULT_MODULE
                    ) -> Tuple[str, Callable[[], Dict[str, Any]]]:
     """Validate any synchronous task -> (task type, zero-argument call producing the solution)."""
@@ -458,6 +526,8 @@ def parse_sync_job(task: Dict[str, Any], default_text_module: str = text.DEFAULT
         return TASK_TEXT, partial(run_text, parse_text(task, default_text_module))
     if task_type == TASK_GEETEST:
         return TASK_GEETEST, partial(run_geetest, parse_geetest(task))
+    if task_type == TASK_RECAPTCHA:
+        return TASK_RECAPTCHA, partial(run_recaptcha, parse_recaptcha(task))
     job = parse_classification(task)
     return (TASK_BLS if task_type == TASK_BLS else TASK_CLASSIFY), partial(run_classification,
                                                                          *job)

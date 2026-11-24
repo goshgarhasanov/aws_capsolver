@@ -3,6 +3,38 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.5 – 2026-11-24
+
+### Added
+- **reCAPTCHA v2 image challenge** solver (`content/recaptcha.js`, new *reCAPTCHA v2* switch with
+  its own icon, on by default; settings v4) through the service's new synchronous
+  `ReCaptchaV2Classification` task (3 tokens per picture).
+  - Runs only in reCAPTCHA frames (`…/recaptcha/api2|enterprise/bframe` and `/anchor` on
+    www.google.com or www.recaptcha.net); every other frame returns at once.
+  - Reads the object from the instruction (`strong`, any language) and the payload picture
+    (`img.rc-image-tile-33` / `-44`) from the page, clicks the returned cells with paced pointer
+    clicks, classifies every replaced tile of a dynamic 3x3 (`img.rc-image-tile-11`, `size: 1`)
+    until none shows the object, then presses Verify.
+  - "Please try again" / a new picture = a wrong round; an unsupported object or no answer =
+    reload; at most 5 failed rounds and 12 pictures per challenge, then the pill offers *Solve*.
+  - With *Auto-solve* the "I'm not a robot" checkbox is clicked once (again after it expired).
+    When it turns ticked, the checkbox frame tells the challenge frame through the service worker
+    (`recaptchaChecked` relay to the tab's frames): that is the success signal, because Chrome
+    stops updating a hidden cross-origin challenge frame.
+  - No tokens are produced or injected, nothing changes the browser fingerprint: the visible
+    challenge is solved like a user would.
+
+### Permissions
+- **No new permissions.** The content scripts already run in every http(s) frame (`all_frames`,
+  `match_origin_as_fallback`), which includes Google's reCAPTCHA iframes, and inside the challenge
+  frame the payload picture is same-origin, so it is read from the loaded `<img>` (or, if that
+  fails, fetched from the frame's own origin) without host access to google.com.
+
+### Tests
+- New reCAPTCHA fixture (`test/fixtures/recaptcha.html` + cross-origin `recaptcha_anchor.html` /
+  `recaptcha_bframe.html`) with a mocked `ReCaptchaV2Classification`: static 3x3, "Please try
+  again", unsupported object (reload), 4x4, dynamic 3x3, the switch, and the real service.
+
 ## 1.0.4 – 2026-11-21
 
 ### Fixed (verified on the live GeeTest demo at 2captcha.com, v3 4/4 and v4 6/6 solved)
