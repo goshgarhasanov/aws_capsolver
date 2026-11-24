@@ -21,6 +21,8 @@ Environment variables
 ---------------------
 RECAPTCHA_HEAD       head path (default weights/recaptcha_head.pt; "none" = zero-shot only)
 RECAPTCHA_BACKBONES  backbones used without a head (default ViT-B-32:laion2b_s34b_b79k@224)
+RECAPTCHA_DENSE      4x4 dense cell head (default weights/recaptcha_dense.pt; "none" = off)
+RECAPTCHA_TAIL       fine-tuned tail for "+tail" backbones (default weights/recaptcha_tail.pt)
 """
 from __future__ import annotations
 
@@ -44,6 +46,7 @@ log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_HEAD = ROOT / "weights" / "recaptcha_head.pt"
+DEFAULT_DENSE = ROOT / "weights" / "recaptcha_dense.pt"
 DEFAULT_BACKBONES = "ViT-B-32:laion2b_s34b_b79k@224"
 ZS_THRESHOLD = float(os.environ.get("RECAPTCHA_ZS_THRESHOLD", "0.5"))
 VOCAB_TEMPLATES = ("a photo of a {}.", "a street view photo of a {}.", "a low quality photo of a {}.")
@@ -145,6 +148,7 @@ class Engine:
         self._vocab_cache: dict[str, tuple[list[str], np.ndarray]] = {}
         self._lock = threading.Lock()
         self.encoders: dict[str, object] = {}
+        self.dense: dict | None = None
         if load_backbones:
             try:
                 for s in dict.fromkeys(self.tile_specs + self.cell_specs):
@@ -155,6 +159,7 @@ class Engine:
                 log.warning("recaptcha: %s; using zero-shot CLIP only", exc)
                 self.head = None
                 self.tile_specs = self.cell_specs = self.specs = default
+            self._load_dense()
             self.zs_specs = list(dict.fromkeys(s.split("+", 1)[0] for s in self.tile_specs + self.cell_specs))
             for s in self.zs_specs:
                 if s not in self.encoders:
@@ -163,6 +168,53 @@ class Engine:
                  self.head["trained_on"] if self.head else "none (zero-shot only)")
 
     # ------------------------------------------------------------------ loading
+    def _load_dense(self) -> None:
+        """4x4 dense cell head (see dense.py); missing / broken file -> cell head or tile fallback."""
+        path = Path(os.environ.get("RECAPTCHA_DENSE", str(DEFAULT_DENSE)))
+        if str(path).strip().lower() in ("", "none", "off", "0") or not path.is_file():
+            if path.name not in ("none", "off", "0"):
+                log.info("recaptcha: no dense 4x4 head at %s", path)
+            return
+        try:
+            import torch
+
+            from .dense import build
+
+            raw = torch.load(path, map_location="cpu", weights_only=True)
+            net = build(int(raw["dim"]), len(raw["classes"]), hidden=int(raw["hidden"]),
+                        cell_dim=int(raw.get("cell_dim") or 0))
+            net.load_state_dict(raw["state"])
+            net.eval()
+            dense = {"net": net, "classes": [str(c) for c in raw["classes"]],
+                     "thr": {str(k): float(v) for k, v in dict(raw["thresholds"]).items()},
+                     "dense_spec": str(raw["dense_backbone"]),
+                     "crop_spec": str(raw["crop_backbone"]) if raw.get("crop_backbone") else None,
+                     "lock": threading.Lock(), "trained_on": str(raw.get("trained_on", ""))}
+            for s in (dense["dense_spec"], dense["crop_spec"]):
+                if s and s not in self.encoders:
+                    self.encoders[s] = get_encoder(s)
+            self.dense = dense
+            log.info("recaptcha: dense 4x4 head loaded (%s)", dense["trained_on"])
+        except Exception as exc:  # noqa: BLE001 - never take the service down for an optional head
+            log.warning("cannot load dense 4x4 head %s (%s); ignoring it", path, exc)
+
+    def knows_dense(self, target: str) -> bool:
+        return self.dense is not None and target in self.dense["classes"]
+
+    def dense_probs(self, img, crops: list, target: str) -> tuple[np.ndarray, float, str]:
+        import torch
+
+        d = self.dense
+        enc = self.encoders[d["dense_spec"]]
+        tok = torch.from_numpy(enc.tokens(features.to_tensor([img], enc.res)))
+        c = None
+        if d["crop_spec"]:
+            cenc = self.encoders[d["crop_spec"]]
+            c = torch.from_numpy(cenc(features.to_tensor(crops, cenc.res))[None])
+        with d["lock"], torch.inference_mode():
+            p = torch.sigmoid(d["net"](tok, c))[0, :, d["classes"].index(target)].numpy()
+        return p, d["thr"].get(target, 0.5), "dense"
+
     @staticmethod
     def _load_head(path: Path) -> dict | None:
         if not path.is_file():
@@ -344,7 +396,9 @@ class Engine:
 
     def classify(self, img, target: str, size: int) -> dict:
         crops = features.model_crops(img, size)
-        if size == 4 and self.knows_cell(target):
+        if size == 4 and self.knows_dense(target):
+            p, thr, method = self.dense_probs(img, crops, target)
+        elif size == 4 and self.knows_cell(target):
             p, thr, method = self.cell_probs(self.embed(crops, self.cell_specs), target)
         else:
             if size == 4:  # no 4x4 head for this class: score the 16 cells as tiles

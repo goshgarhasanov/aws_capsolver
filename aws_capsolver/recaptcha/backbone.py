@@ -150,6 +150,17 @@ class Encoder:
         f = f / f.norm(dim=-1, keepdim=True)
         return f.numpy()
 
+    def tokens(self, x) -> np.ndarray:
+        """(n, 1 + patches, d) L2-normalised CLS + patch embeddings (ln_post + proj per token)."""
+        import torch
+
+        v = self.visual
+        with self.lock, torch.inference_mode():
+            h = v.transformer(v._embeds(x))
+            h = (v.ln_post(h) @ v.proj).float()
+        h = h / h.norm(dim=-1, keepdim=True)
+        return h.numpy()
+
     def encode_text(self, prompts: list[str]) -> np.ndarray:
         import open_clip
         import torch

@@ -146,13 +146,60 @@ def run_bx4(enc, split: str):
     def load(r):
         return features.model_crops(_open(d / r["file_name"]), 4)
 
-    def flat():
-        for crops in _prefetch(load, rows):
+    def flat(chunk):
+        for crops in _prefetch(load, chunk):
             yield from crops
 
-    emb = embed_pils(enc, flat(), len(rows) * 17, f"bx4/{split}")
-    emb = emb.reshape(len(rows), 17, -1)
+    # Resumable: every CHUNK challenges are saved as a part file, existing parts are reused.
+    CHUNK = 500
+    parts_dir = DATA / "emb" / "parts" / tag(enc.spec)
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    embs = []
+    for k in range(0, len(rows), CHUNK):
+        chunk = rows[k:k + CHUNK]
+        pp = parts_dir / f"bx4_{split}_{k:06d}_{len(chunk)}.npy"
+        if pp.exists():
+            embs.append(np.load(pp))
+            continue
+        e = embed_pils(enc, flat(chunk), len(chunk) * 17, f"bx4/{split} [{k}:{k + len(chunk)}]/{len(rows)}")
+        tmp = pp.with_name(pp.stem + ".tmp.npy")
+        np.save(tmp, e)
+        os.replace(tmp, pp)
+        embs.append(e)
+    emb = np.concatenate(embs).reshape(len(rows), 17, -1)
     return dict(emb=emb, target=np.array([r["target"] for r in rows]),
+                answers=_pad([r["correct_answers"] for r in rows], 16),
+                machine=_pad([r["machine_answers"] for r in rows], 16),
+                ids=np.array([r["id"] for r in rows]))
+
+
+def dense_tokens(enc, x) -> np.ndarray:
+    """(n, 1 + grid*grid, d) L2-normalised CLS + patch embeddings (ln_post + proj on every token)."""
+    import torch
+
+    v = enc.visual
+    with torch.inference_mode():
+        h = v.transformer(v._embeds(x))
+        h = v.ln_post(h) @ v.proj
+    h = h / h.norm(dim=-1, keepdim=True)
+    return h.numpy().astype(np.float16)
+
+
+def run_bx4dense(enc, split: str):
+    """Dense 4x4 features: the whole photo at enc.res (512 px for ViT-B-32 = 16x16 patches,
+    4x4 patches per cell)."""
+    d, rows = _rows("4x4", split)
+    out = []
+    t0 = time.time()
+    batch = []
+    for k, im in enumerate(_prefetch(lambda r: _open(d / r["file_name"]), rows)):
+        batch.append(im)
+        if len(batch) == 16 or k == len(rows) - 1:
+            out.append(dense_tokens(enc, features.to_tensor(batch, enc.res)))
+            batch = []
+            if (k + 1) % 320 == 0:
+                print(f"  bx4dense/{split}: {k + 1}/{len(rows)} {(k + 1) / (time.time() - t0):.1f} img/s", flush=True)
+    return dict(emb=np.concatenate(out), target=np.array([r["target"] for r in rows]),
                 answers=_pad([r["correct_answers"] for r in rows], 16),
                 machine=_pad([r["machine_answers"] for r in rows], 16),
                 ids=np.array([r["id"] for r in rows]))
@@ -161,7 +208,7 @@ def run_bx4(enc, split: str):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backbone", required=True)
-    ap.add_argument("--what", required=True, choices=["danny", "bx3", "bx4"])
+    ap.add_argument("--what", required=True, choices=["danny", "bx3", "bx4", "bx4dense"])
     ap.add_argument("--split", required=True, nargs="+")
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--force", action="store_true")
@@ -176,7 +223,7 @@ def main() -> None:
             print(f"skip {p} (exists)")
             continue
         t0 = time.time()
-        res = {"danny": run_danny, "bx3": run_bx3, "bx4": run_bx4}[a.what](enc, split)
+        res = {"danny": run_danny, "bx3": run_bx3, "bx4": run_bx4, "bx4dense": run_bx4dense}[a.what](enc, split)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp.npz")
         np.savez(tmp, **res)
