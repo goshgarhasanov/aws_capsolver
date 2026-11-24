@@ -63,7 +63,12 @@ How each one works:
   classified on its own (`size: 1`) and clicked while it still shows the object, then Verify is
   pressed. "Please try again" / a new picture after Verify is a wrong round; an unknown object
   (`unsupported question`) or no answer presses reload; a picture that stays with an error or
-  without any reaction is reloaded; at most 5 failed rounds and 12 pictures per challenge. Success
+  without any reaction is reloaded; at most 8 failed rounds and 24 pictures per challenge. A
+  picture is read only after the instruction and the picture have stayed the same for 0.6 s and
+  the payload URL was not answered before (the live frame swaps the instruction up to ~1 s before
+  the picture). An empty answer is sent as *Skip* only where reCAPTCHA offers it (4x4, or an
+  instruction that says "skip"); on a 3x3 it means the model missed the object, so the picture is
+  reloaded instead of a certain "Please select all matching images". Success
   is the checkbox turning ticked (the checkbox frame tells the challenge frame through the service
   worker; a hidden challenge frame cannot see it closing itself). No token is produced or injected
   and nothing tries to hide automation from Google: the visible challenge is solved like a user.
@@ -127,8 +132,19 @@ against a mocked `GeeTestClassification`; the GeeTest pages check the drop posit
 themselves and log the drag (moves, duration, vertical range, overshoot). The reCAPTCHA fixture
 (`recaptcha.html` hosting cross-origin `recaptcha_anchor.html` + `recaptcha_bframe.html`) covers a
 static 3x3, "Please try again", an unsupported object (reload), 4x4 and a dynamic 3x3 against a
-mocked `ReCaptchaV2Classification` (`--only recaptcha` runs just that group).
+mocked `ReCaptchaV2Classification`, plus an instruction that changes ~1 s before its picture and a
+3x3 where nothing is found (`--only recaptcha` runs just that group).
 No third-party site is visited.
+
+`test/live_recaptcha.py` is the only script that visits a real site: a public solver demo page
+(default `https://2captcha.com/demo/recaptcha-v2`, fresh profile, no accounts). The extension
+talks to a recording proxy started by the script, which forwards everything to the real service
+and saves each classified picture with its question, size, answer and reCAPTCHA's reaction into
+`data/recaptcha/live/` (`index.jsonl`, `runs.jsonl`, `img/`; git-ignored). It reads the
+cross-origin frames read-only over the DevTools port (Playwright does not list them), paces
+attempts (>= 20 s, at most 40 per run) and stops at Google's "automated queries" page:
+
+    CAPTCHOSA_KEY=CX-... .venv/bin/python extension/test/live_recaptcha.py --attempts 15
 
 ## Known limits
 

@@ -652,6 +652,16 @@ def recaptcha_scenarios(context, ext):
           and all(m.get("dims") == [100, 100] for m in mocks if m.get("size") == 1),
           json.dumps({"verify": verifies, "mocks": mocks}))
 
+    ok, ev, mocks, _, _ = run_page("lagswap")
+    stale = [m for m in mocks if m.get("question") == "cars" and m.get("picture") == "s33_bus"]
+    check("recaptcha: new question shown before the new picture -> read only once both are in place",
+          ok and not stale and [m.get("picture") for m in mocks] == ["s33_bus", "s33_cars"], json.dumps(mocks))
+
+    ok, ev, mocks, _, _ = run_page("empty33")
+    check("recaptcha 3x3 with nothing found: reload instead of an empty Verify, next picture solved",
+          ok and len(ev("reload")) == 1 and len(ev("verify")) == 1 and ev("verify")[0].get("accepted"),
+          json.dumps({"log": ev("reload") + ev("verify"), "mocks": mocks}))
+
     # the switch: off -> neither the checkbox nor the challenge is touched
     ext.settings(solvers={"recaptcha": False})
     since = len(fixture_log()["recaptcha"])

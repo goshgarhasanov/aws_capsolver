@@ -3,6 +3,26 @@
 All notable changes to the Captchosa browser extension. Versions follow
 [semantic versioning](https://semver.org/); bump with `python3 tools/build_extension.py patch|minor|major`.
 
+## 1.0.6 – 2026-11-24
+
+### Fixed (reCAPTCHA v2, found on the live widget)
+- **Stale picture after Verify:** the real challenge frame swaps the instruction up to ~1 s
+  before the new payload picture, so the old picture was sent with the new question (a wasted,
+  wrong call, and on 4x4 sets the 12-picture cap ran out). A picture is now read only after the
+  question, layout and picture stayed the same for 0.6 s and its payload URL was never answered
+  (verified or reloaded) before.
+- **Empty answer on a 3x3:** it was verified as is and always drew "Please select all matching
+  images". A 3x3 always contains the object, so the picture is reloaded instead; *Skip* is still
+  pressed with an empty answer on 4x4 and on instructions that say "skip".
+- Limits for low-trust sessions, where Google answers even correct rounds with "Please try again"
+  and shows 4x4 sets of 5-10 pages: at most 8 failed rounds (was 5) and 24 pictures (was 12).
+
+### Tests
+- Fixture modes `lagswap` (instruction ~1.2 s before the picture) and `empty33`.
+- `test/live_recaptcha.py`: live run on a public solver demo page with a recording proxy that
+  stores every classified picture, question, answer and reCAPTCHA's reaction in
+  `data/recaptcha/live/` (outside the extension; nothing is added to the extension itself).
+
 ## 1.0.5 – 2026-11-24
 
 ### Added

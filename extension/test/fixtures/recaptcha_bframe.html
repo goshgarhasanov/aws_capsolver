@@ -7,7 +7,7 @@
      (.rc-imageselect-tileselected), the dynamic 3x3 (.rc-imageselect-dynamic-selected, then a new
      img.rc-image-tile-11), the error lines and the reload / Verify buttons. Pictures come from
      /recaptcha/payload on this origin; every click, reload and verify is logged to /recaptcha/log.
-     Modes: static33, wrongfirst, unsupported, tile44, dynamic33. -->
+     Modes: static33, wrongfirst, unsupported, tile44, dynamic33, lagswap, empty33. -->
 <style>
   body { margin: 0; font: 14px Roboto, sans-serif; }
   #rc-imageselect { width: 400px; background: #fff; }
@@ -58,6 +58,10 @@ const SCENARIOS = {
   unsupported: [{ id: "s33_zebra", q: "zebras", size: 3, answer: [0] }, CARS],
   tile44: [{ id: "g44_moto", q: "motorcycles", size: 4, answer: [0, 1, 4, 5], canonical: true }],
   // cell 1 gets a tile with the object (to click again), then one without; cell 3 one without
+  // the real frame swaps the instruction first and the picture ~1 s later
+  lagswap: [{ id: "s33_bus", q: "buses", size: 3, answer: null }, Object.assign({ error: "incorrect-response" }, CARS)],
+  // the model finds nothing on a 3x3 without "skip": take another picture, do not verify empty
+  empty33: [{ id: "s33_empty", q: "boats", size: 3, answer: null, tail: "Click verify once there are none left" }, CARS],
   dynamic33: [{ id: "d33_lights", q: "traffic lights", size: 3, answer: [1, 3],
                 dynamic: { 1: ["t_yes_a", "t_no_b"], 3: ["t_no_c"] } }],
 };
@@ -86,9 +90,17 @@ function render(i, error) {
   const n = pic.size;
   const cls = pic.canonical ? "rc-imageselect-desc" : "rc-imageselect-desc-no-canonical";
   const what = pic.canonical ? "squares" : "images";
-  const tail = pic.dynamic ? "Click verify once there are none left" : "If there are none, click skip";
+  const tail = pic.tail || (pic.dynamic ? "Click verify once there are none left" : "If there are none, click skip");
   document.getElementById("desc").innerHTML = `<div class="${cls}" style="width: 352px; font-size: 14px;">` +
     `Select all ${what} with <strong>${pic.q}</strong><span>${tail}</span></div>`;
+  if (MODE === "lagswap" && i > 0) {
+    setTimeout(() => renderTable(n, error), 1200);
+    return;
+  }
+  renderTable(n, error);
+}
+
+function renderTable(n, error) {
   const tile = n === 3 ? 126 : 93;
   let html = `<table class="rc-imageselect-table-${n}${n}"><tbody>`;
   for (let r = 0; r < n; r++) {

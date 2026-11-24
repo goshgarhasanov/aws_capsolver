@@ -18,12 +18,13 @@
   globalThis.__captchosaRecaptcha = true;
 
   const KIND = "recaptcha";
-  const MAX_ROUNDS = 5;          // wrong answers, reloads and "no answer" per session
-  const MAX_CHALLENGES = 12;     // pictures per session ("Next" pages included)
+  const MAX_ROUNDS = 8;          // wrong answers, reloads and "no answer" per session (live: low-trust sessions often need 4-6)
+  const MAX_CHALLENGES = 24;     // pictures per session ("Next" pages included: live 4x4 sets run 5-10 pages)
   const VERDICT_MS = 7000;       // how long to wait for reCAPTCHA's reaction to Verify
   const IMAGE_TIMEOUT_MS = 10000;
   const DYNAMIC_MS = 90000;      // a dynamic challenge as a whole
   const MAX_DYNAMIC_TILES = 40;
+  const SETTLE_MS = 600;         // the challenge must look the same this long before it is read
   const ERRORS = {               // reCAPTCHA's own messages (shown with display: block)
     "rc-imageselect-incorrect-response": "try-again",          // "Please try again."
     "rc-imageselect-error-select-more": "select-more",         // "Please select all matching images."
@@ -43,6 +44,7 @@
     anchorChecked: false,
     checkedAt: 0,            // when the checkbox frame last reported "ticked" (via the background)
     done: new Set(),         // signatures of pictures that ended in a solve (the frame keeps them)
+    answered: new Set(),     // payload URLs already verified or reloaded away
   };
 
   // The parent page hides a closed challenge by moving its iframe off-screen; inside the frame
@@ -77,6 +79,13 @@
     return text.replace(/\s+/g, " ").trim().slice(0, 128);
   }
 
+  // The small line under the object ("Click verify once there are none left.", "If there are
+  // none, click skip").
+  function hintOf(root) {
+    const span = root.querySelector(".rc-imageselect-desc-no-canonical span, .rc-imageselect-desc span");
+    return span ? span.textContent.replace(/\s+/g, " ").trim() : "";
+  }
+
   function cellsOf(table) {
     return [...table.querySelectorAll("td")].filter((td) => td.classList.contains("rc-imageselect-tile") ||
       td.getAttribute("role") === "button");
@@ -96,6 +105,7 @@
     return {
       root, table, rows, cols, cells, img,
       question: questionOf(root),
+      skippable: rows === 4 || /\bskip\b/i.test(hintOf(root)),
       verify: document.getElementById("recaptcha-verify-button"),
       reload: document.getElementById("recaptcha-reload-button"),
       supported: rows === cols && (rows === 3 || rows === 4) && cells.length === rows * cols,
@@ -105,6 +115,32 @@
   const signature = (ch) => `${ch.rows}x${ch.cols}|${ch.question}|${ch.img ? ch.img.src : ""}`;
   const imgReady = (img) => !!img && img.complete && img.naturalWidth > 0;
   const ready = (ch) => !!ch && imgReady(ch.img);
+
+  // A loaded challenge whose question, layout and picture have not changed for SETTLE_MS and
+  // whose picture was not answered already. The real frame swaps the instruction first and
+  // the picture up to ~1 s later (seen live), so a single look can pair the new question with
+  // the old picture; every payload URL is new, so an answered one is never the next challenge.
+  async function settled(ms) {
+    const end = Date.now() + (ms || IMAGE_TIMEOUT_MS);
+    let sig = "";
+    let since = 0;
+    while (Date.now() < end) {
+      const ch = detect();
+      if (ready(ch) && !state.answered.has(ch.img.src)) {
+        const now = signature(ch);
+        if (now !== sig) {
+          sig = now;
+          since = Date.now();
+        } else if (Date.now() - since >= SETTLE_MS) {
+          return ch;
+        }
+      } else {
+        sig = "";
+      }
+      await CS.sleep(120);
+    }
+    return null;
+  }
 
   // Pixels of a challenge picture: the loaded <img> (same-origin, no new request), else a
   // same-origin fetch of its URL from inside the frame.
@@ -197,6 +233,10 @@
       throw err("BAD_SOLUTION", "the answer does not fit the grid");
     }
     const want = new Set(sol.objects.map(Number).filter((i) => Number.isInteger(i) && i >= 0 && i < n));
+    // An empty answer is only valid where reCAPTCHA offers "Skip" (4x4, or an instruction that
+    // says so); a 3x3 always holds the object, so an empty answer there means the model missed
+    // it: take another picture instead of a certain "Please select all matching images".
+    if (!want.size && !ch.skippable) return { action: "reload", detail: "no tile found" };
     const cells = cellsOf(ch.table);
     // toggle only what differs (tiles the user already picked stay as they are when wanted)
     for (let i = 0; i < n; i++) {
@@ -218,7 +258,13 @@
     return { action: "verified", detail, errBefore, at };
   }
 
+  function markAnswered(ch) {
+    if (ch && ch.img && ch.img.src) state.answered.add(ch.img.src);
+    if (state.answered.size > 200) state.answered.delete(state.answered.values().next().value);
+  }
+
   async function pressVerify(ch) {
+    markAnswered(ch);
     await CS.sleep(rand(350, 800));
     const btn = document.getElementById("recaptcha-verify-button") || ch.verify;
     if (!btn || !CS.isVisible(btn)) throw err("WIDGET_NOT_FOUND", "no Verify button");
@@ -226,6 +272,7 @@
   }
 
   async function pressReload(ch) {
+    markAnswered(ch);
     const btn = document.getElementById("recaptcha-reload-button") || ch.reload;
     if (!btn || !CS.isVisible(btn)) throw err("WIDGET_NOT_FOUND", "no reload button");
     await CS.sleep(rand(400, 900));
@@ -287,8 +334,7 @@
     try {
       while (rounds < MAX_ROUNDS && challenges < MAX_CHALLENGES) {
         if (!state.frameVisible) break;
-        ch = ready(ch) && ch.table.isConnected ? ch : await CS.waitFor(() => { const c = detect(); return ready(c) ? c : null; },
-          IMAGE_TIMEOUT_MS, 200);
+        ch = await settled(IMAGE_TIMEOUT_MS);
         if (!ch) throw err("WIDGET_NOT_FOUND", "the challenge picture did not load");
         const sig = signature(ch);
         challenges += 1;

@@ -141,6 +141,7 @@ RECAPTCHA_PICTURES = {
     "s33_cars": (300, {"type": "multi", "objects": [0, 4, 8], "size": 3}),
     "s33_bus": (300, {"type": "multi", "objects": [1, 2], "size": 3}),
     "s33_zebra": (300, "unsupported"),
+    "s33_empty": (300, {"type": "multi", "objects": [], "size": 3}),
     "g44_moto": (450, {"type": "multi", "objects": [0, 1, 4, 5], "size": 4}),
     "d33_lights": (300, {"type": "multi", "objects": [1, 3], "size": 3}),
     "t_yes_a": (100, {"type": "single", "hasObject": True, "size": 1}),

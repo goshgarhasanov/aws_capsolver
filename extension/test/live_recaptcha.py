@@ -11,7 +11,11 @@ extension itself.
 
 Output (git-ignored):
     data/recaptcha/live/img/<sha1>.<ext>    the picture exactly as the extension sent it
-    data/recaptcha/live/index.jsonl         one line per classified picture
+    data/recaptcha/live/index.jsonl         one line per classified picture; "outcome" is
+        accepted (checkbox ticked), rejected:<error line> (incorrect-response, error-select-more,
+        ...), new-images (another picture without an error: a "Next" page of a 4x4 set, judged
+        only at the set's end, or a further round), no-answer[:reloaded], dynamic-tile:<parent>
+        for the replaced 1x1 tiles of a dynamic 3x3, unknown
     data/recaptcha/live/runs.jsonl          one line per attempt (token, rounds, time, reason)
     data/recaptcha/live/dom/                bframe HTML snapshots (--dump-dom)
 
@@ -340,11 +344,8 @@ def attempt(context, finder, url, timeout, dump_dom, n):
                 result["token"] = bool(token_of(page))
                 result["reason"] = "solved" if result["token"] else "checked-without-token"
                 break
-            if badge and badge[0].endswith("error") and "press Solve" not in badge[1] and "gave up" not in badge[1]:
-                result["reason"] = "extension error: " + badge[1]
-                break
-            if badge and badge[0].endswith("error"):
-                result["reason"] = "extension: " + badge[1]
+            if badge and badge[0].endswith("error"):  # gave up, or a typed error; the pill shows why
+                result["reason"] = "extension: " + badge[1].split("\n")[0]
                 break
         else:
             result["reason"] = result["reason"] or "timeout"
@@ -375,7 +376,8 @@ def label_tasks(tasks, events, result):
         before = [e for e in events if e["t"] <= t["t"]]
         cur = before[-1]["snap"] if before else {}
         t = dict(t, src=cur.get("src", ""), instruction=cur.get("desc", ""), table=cur.get("table", ""),
-                 attempt=result["attempt"])
+                 attempt=result["attempt"], run=result["start"], label=result.get("label", ""),
+                 extension=result.get("extension", ""))
         if t.get("size") == 1:
             t["outcome"] = "dynamic-tile"
             out.append(t)
@@ -477,6 +479,8 @@ def main():
             for n in range(1, args.attempts + 1):
                 log(f"attempt {n}/{args.attempts}")
                 result, events, tasks = attempt(context, finder, args.url, args.timeout, args.dump_dom, n)
+                result["extension"] = version
+                result["label"] = args.label
                 labelled = label_tasks(tasks, events, result)
                 try:
                     ext_log = opt.evaluate("async () => (await chrome.storage.local.get('log')).log || []")
@@ -486,8 +490,6 @@ def main():
                 except Exception as e:
                     log(f"  extension log unavailable: {e}")
                 result["rounds"] = sum(1 for t in labelled if t["size"] != 1)
-                result["extension"] = version
-                result["label"] = args.label
                 result["service"] = {k: health.get(k) for k in ("version", "recaptcha")}
                 result["questions"] = [t["question"] for t in labelled if t["size"] != 1]
                 result["outcomes"] = [t["outcome"] for t in labelled if t["size"] != 1]
